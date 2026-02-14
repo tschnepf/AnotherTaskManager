@@ -1,24 +1,34 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { PDFWorker, getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 import {
+  configureAuthHandlers,
   createProject,
   deleteTask,
+  disconnectGoogleEmailOAuth,
   downloadDatabaseBackup,
+  exchangeGoogleEmailOAuthCode,
+  getEmailCaptureSettings,
   getProjects,
   getTasks,
+  initiateGoogleEmailOAuth,
   login,
+  logout as logoutSession,
   quickAddTask,
   reorderTask,
   restoreDatabaseBackup,
   setTaskCompleted,
+  syncImapEmail,
+  syncGoogleEmailOAuth,
   uploadTaskAttachment,
+  updateEmailCaptureSettings,
   updateTask,
 } from './api'
 import './App.css'
 
 const TOKEN_KEY = 'taskhub_access_token'
+const REFRESH_TOKEN_KEY = 'taskhub_refresh_token'
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 const PRIORITY_OPTIONS = [
   { value: '', label: '-' },
@@ -36,6 +46,25 @@ const PREVIEWABLE_IMAGE_EXTENSIONS = new Set([
   'svg',
   'avif',
 ])
+const PREVIEWABLE_TEXT_EXTENSIONS = new Set([
+  'eml',
+  'txt',
+  'md',
+  'log',
+  'json',
+  'csv',
+  'tsv',
+  'xml',
+  'yaml',
+  'yml',
+  'ini',
+  'conf',
+  'cfg',
+  'ics',
+  'vcf',
+])
+const TEXT_PREVIEW_BYTE_LIMIT = 2 * 1024 * 1024
+const TEXT_PREVIEW_CHAR_LIMIT = 250000
 const APP_SETTINGS_STORAGE_KEY = 'taskhub_app_settings_v1'
 const DEFAULT_APP_SETTINGS = Object.freeze({
   profile: {
@@ -43,15 +72,25 @@ const DEFAULT_APP_SETTINGS = Object.freeze({
     replyToEmail: '',
     timezone: 'UTC',
   },
-  smtp: {
-    enabled: false,
-    host: '',
-    port: '587',
-    security: 'starttls',
-    username: '',
-    password: '',
-    fromName: '',
-    fromEmail: '',
+  emailCapture: {
+    inboundAddress: '',
+    inboundToken: '',
+    whitelistInput: '',
+    provider: 'imap',
+    oauthEmail: '',
+    oauthConnected: false,
+    imapConfigured: false,
+    imapUsername: '',
+    imapPasswordInput: '',
+    imapClearPassword: false,
+    imapHost: '',
+    imapProvider: 'auto',
+    imapPort: '993',
+    imapUseSsl: true,
+    imapFolder: 'INBOX',
+    imapSearchCriteria: 'UNSEEN',
+    imapMarkSeenOnSuccess: true,
+    rotateToken: false,
   },
   ai: {
     mode: 'off',
@@ -68,7 +107,7 @@ const DEFAULT_APP_SETTINGS = Object.freeze({
 function cloneDefaultAppSettings() {
   return {
     profile: { ...DEFAULT_APP_SETTINGS.profile },
-    smtp: { ...DEFAULT_APP_SETTINGS.smtp },
+    emailCapture: { ...DEFAULT_APP_SETTINGS.emailCapture },
     ai: { ...DEFAULT_APP_SETTINGS.ai },
     taskList: { ...DEFAULT_APP_SETTINGS.taskList },
   }
@@ -105,23 +144,61 @@ function loadAppSettings() {
             ? parsed.profile.timezone
             : defaults.profile.timezone,
       },
-      smtp: {
-        enabled:
-          typeof parsed.smtp?.enabled === 'boolean' ? parsed.smtp.enabled : defaults.smtp.enabled,
-        host: typeof parsed.smtp?.host === 'string' ? parsed.smtp.host : defaults.smtp.host,
-        port: typeof parsed.smtp?.port === 'string' ? parsed.smtp.port : defaults.smtp.port,
-        security:
-          typeof parsed.smtp?.security === 'string' ? parsed.smtp.security : defaults.smtp.security,
-        username:
-          typeof parsed.smtp?.username === 'string' ? parsed.smtp.username : defaults.smtp.username,
-        password:
-          typeof parsed.smtp?.password === 'string' ? parsed.smtp.password : defaults.smtp.password,
-        fromName:
-          typeof parsed.smtp?.fromName === 'string' ? parsed.smtp.fromName : defaults.smtp.fromName,
-        fromEmail:
-          typeof parsed.smtp?.fromEmail === 'string'
-            ? parsed.smtp.fromEmail
-            : defaults.smtp.fromEmail,
+      emailCapture: {
+        inboundAddress:
+          typeof parsed.emailCapture?.inboundAddress === 'string'
+            ? parsed.emailCapture.inboundAddress
+            : defaults.emailCapture.inboundAddress,
+        inboundToken: '',
+        whitelistInput:
+          typeof parsed.emailCapture?.whitelistInput === 'string'
+            ? parsed.emailCapture.whitelistInput
+            : defaults.emailCapture.whitelistInput,
+        provider:
+          typeof parsed.emailCapture?.provider === 'string'
+            ? parsed.emailCapture.provider
+            : defaults.emailCapture.provider,
+        oauthEmail:
+          typeof parsed.emailCapture?.oauthEmail === 'string'
+            ? parsed.emailCapture.oauthEmail
+            : defaults.emailCapture.oauthEmail,
+        oauthConnected: Boolean(parsed.emailCapture?.oauthConnected),
+        imapConfigured: Boolean(parsed.emailCapture?.imapConfigured),
+        imapUsername:
+          typeof parsed.emailCapture?.imapUsername === 'string'
+            ? parsed.emailCapture.imapUsername
+            : defaults.emailCapture.imapUsername,
+        imapPasswordInput: '',
+        imapClearPassword: false,
+        imapHost:
+          typeof parsed.emailCapture?.imapHost === 'string'
+            ? parsed.emailCapture.imapHost
+            : defaults.emailCapture.imapHost,
+        imapProvider:
+          typeof parsed.emailCapture?.imapProvider === 'string'
+            ? parsed.emailCapture.imapProvider
+            : defaults.emailCapture.imapProvider,
+        imapPort:
+          typeof parsed.emailCapture?.imapPort === 'string'
+            ? parsed.emailCapture.imapPort
+            : defaults.emailCapture.imapPort,
+        imapUseSsl:
+          typeof parsed.emailCapture?.imapUseSsl === 'boolean'
+            ? parsed.emailCapture.imapUseSsl
+            : defaults.emailCapture.imapUseSsl,
+        imapFolder:
+          typeof parsed.emailCapture?.imapFolder === 'string'
+            ? parsed.emailCapture.imapFolder
+            : defaults.emailCapture.imapFolder,
+        imapSearchCriteria:
+          typeof parsed.emailCapture?.imapSearchCriteria === 'string'
+            ? parsed.emailCapture.imapSearchCriteria
+            : defaults.emailCapture.imapSearchCriteria,
+        imapMarkSeenOnSuccess:
+          typeof parsed.emailCapture?.imapMarkSeenOnSuccess === 'boolean'
+            ? parsed.emailCapture.imapMarkSeenOnSuccess
+            : defaults.emailCapture.imapMarkSeenOnSuccess,
+        rotateToken: false,
       },
       ai: {
         mode: typeof parsed.ai?.mode === 'string' ? parsed.ai.mode : defaults.ai.mode,
@@ -158,7 +235,68 @@ function saveAppSettings(settings) {
   if (typeof window === 'undefined') {
     return
   }
-  window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(settings))
+  const persisted = {
+    ...settings,
+    emailCapture: {
+      inboundAddress: settings.emailCapture?.inboundAddress || '',
+      inboundToken: '',
+      whitelistInput: settings.emailCapture?.whitelistInput || '',
+      provider: settings.emailCapture?.provider || 'imap',
+      oauthEmail: settings.emailCapture?.oauthEmail || '',
+      oauthConnected: Boolean(settings.emailCapture?.oauthConnected),
+      imapConfigured: Boolean(settings.emailCapture?.imapConfigured),
+      imapUsername: settings.emailCapture?.imapUsername || '',
+      imapPasswordInput: '',
+      imapClearPassword: false,
+      imapHost: settings.emailCapture?.imapHost || '',
+      imapProvider: settings.emailCapture?.imapProvider || 'auto',
+      imapPort: settings.emailCapture?.imapPort || '993',
+      imapUseSsl: settings.emailCapture?.imapUseSsl !== false,
+      imapFolder: settings.emailCapture?.imapFolder || 'INBOX',
+      imapSearchCriteria: settings.emailCapture?.imapSearchCriteria || 'UNSEEN',
+      imapMarkSeenOnSuccess: settings.emailCapture?.imapMarkSeenOnSuccess !== false,
+      rotateToken: false,
+    },
+  }
+  window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(persisted))
+}
+
+function parseEmailWhitelistInput(rawInput) {
+  const source = String(rawInput || '')
+  const seen = new Set()
+  return source
+    .split(/[\n,]/g)
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry)
+    .filter((entry) => {
+      if (seen.has(entry)) return false
+      seen.add(entry)
+      return true
+    })
+}
+
+function emailCaptureSettingsFromApi(data) {
+  const whitelist = Array.isArray(data?.inbound_email_whitelist) ? data.inbound_email_whitelist : []
+  return {
+    inboundAddress: String(data?.inbound_email_address || ''),
+    inboundToken: String(data?.inbound_email_token || ''),
+    whitelistInput: whitelist.join('\n'),
+    provider: String(data?.inbound_email_mode || data?.inbound_email_provider || 'imap'),
+    oauthEmail: String(data?.gmail_oauth_email || ''),
+    oauthConnected: Boolean(data?.gmail_oauth_connected),
+    imapConfigured: Boolean(data?.imap_configured),
+    imapUsername: String(data?.imap_username || ''),
+    imapPasswordInput: '',
+    imapClearPassword: false,
+    imapHost: String(data?.imap_host || ''),
+    imapProvider: String(data?.imap_provider || 'auto'),
+    imapPort: String(data?.imap_port || '993'),
+    imapUseSsl: Boolean(data?.imap_use_ssl ?? true),
+    imapFolder: String(data?.imap_folder || 'INBOX'),
+    imapSearchCriteria: String(data?.imap_search_criteria || 'UNSEEN'),
+    imapMarkSeenOnSuccess: Boolean(data?.imap_mark_seen_on_success ?? true),
+    rotateToken: false,
+  }
 }
 
 function initialTaskViewFromSettings(settings) {
@@ -192,6 +330,20 @@ function priorityClassFromLevel(level) {
   if (level === 'medium') return 'priority-text-medium'
   if (level === 'low') return 'priority-text-low'
   return ''
+}
+
+function priorityLabelFromValue(priority) {
+  const level = priorityLevelFromValue(priority)
+  if (!level) {
+    return 'No priority'
+  }
+  if (level === 'high') {
+    return 'High'
+  }
+  if (level === 'medium') {
+    return 'Medium'
+  }
+  return 'Low'
 }
 
 function formatAreaLabel(area) {
@@ -263,6 +415,9 @@ function attachmentPreviewType(attachment) {
   }
   if (PREVIEWABLE_IMAGE_EXTENSIONS.has(extension)) {
     return 'image'
+  }
+  if (PREVIEWABLE_TEXT_EXTENSIONS.has(extension)) {
+    return 'text'
   }
   return ''
 }
@@ -486,6 +641,88 @@ function PdfCanvasViewer({ url, fileName }) {
   )
 }
 
+function TextAttachmentViewer({ url }) {
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [textContent, setTextContent] = useState('')
+  const [isTruncated, setIsTruncated] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadTextAttachment() {
+      setIsLoading(true)
+      setError('')
+      setTextContent('')
+      setIsTruncated(false)
+
+      try {
+        const response = await fetch(url, { credentials: 'include' })
+        if (!response.ok) {
+          throw new Error(`Failed to load file (${response.status})`)
+        }
+
+        const contentLength = Number.parseInt(response.headers.get('content-length') || '', 10)
+        if (Number.isFinite(contentLength) && contentLength > TEXT_PREVIEW_BYTE_LIMIT) {
+          throw new Error('File is too large to preview in-app.')
+        }
+
+        const fullText = await response.text()
+        if (cancelled) {
+          return
+        }
+
+        if (fullText.length > TEXT_PREVIEW_CHAR_LIMIT) {
+          setTextContent(fullText.slice(0, TEXT_PREVIEW_CHAR_LIMIT))
+          setIsTruncated(true)
+        } else {
+          setTextContent(fullText)
+        }
+        setIsLoading(false)
+      } catch (cause) {
+        if (!cancelled) {
+          const message = cause instanceof Error ? cause.message : 'Unable to preview this file.'
+          setError(message)
+          setIsLoading(false)
+        }
+      }
+    }
+
+    loadTextAttachment()
+    return () => {
+      cancelled = true
+    }
+  }, [url])
+
+  if (error) {
+    return (
+      <div className="text-viewer-error">
+        <p>Unable to preview this file in-app.</p>
+        <p className="text-viewer-error-detail">{error}</p>
+        <a href={url} target="_blank" rel="noreferrer">
+          Open in browser
+        </a>
+      </div>
+    )
+  }
+
+  return (
+    <div className="text-viewer-shell">
+      {isLoading ? <p className="text-viewer-status">Loading attachment...</p> : null}
+      {!isLoading ? (
+        <>
+          <pre className="text-viewer-content">{textContent || 'This file is empty.'}</pre>
+          {isTruncated ? (
+            <p className="text-viewer-truncated">
+              Preview truncated. Download the file to view the full content.
+            </p>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  )
+}
+
 function formatCreatedTimestamp(value) {
   if (!value) {
     return '—'
@@ -532,7 +769,7 @@ function AuthPage({ onLoggedIn }) {
     setError('')
     try {
       const data = await login(email, password)
-      onLoggedIn(data.access)
+      onLoggedIn(data.access, data.refresh)
     } catch (e) {
       setError(e.message)
     }
@@ -818,9 +1055,15 @@ function SettingsPage({
   token,
   settingsDraft,
   settingsSavedMessage,
+  isSavingSettings,
+  isSyncingEmail,
   onUpdateSetting,
   onSaveSettings,
   onResetSettings,
+  onConnectGoogle,
+  onDisconnectGoogle,
+  onSyncGoogle,
+  onSyncImap,
   onBackToTasks,
 }) {
   const [activeSection, setActiveSection] = useState('user')
@@ -837,9 +1080,9 @@ function SettingsPage({
       description: 'Display name, reply-to email, and timezone defaults.',
     },
     {
-      id: 'smtp',
-      label: 'Email SMTP',
-      description: 'Outgoing SMTP host, auth, and sender identity.',
+      id: 'emailCapture',
+      label: 'IMAP',
+      description: 'Configure inbound IMAP account credentials and sync behavior.',
     },
     {
       id: 'ai',
@@ -942,97 +1185,237 @@ function SettingsPage({
       )
     }
 
-    if (activeSectionMeta.id === 'smtp') {
+    if (activeSectionMeta.id === 'emailCapture') {
+      const inboundMode = settingsDraft.emailCapture.provider
+      const inboundModeLabel =
+        inboundMode === 'imap' ? 'IMAP' : inboundMode === 'gmail_oauth' ? 'Gmail OAuth' : 'Webhook'
       return (
         <div className="settings-detail-card">
-          <label className="settings-checkbox" htmlFor="settings-smtp-enabled">
+          <label className="settings-field" htmlFor="settings-inbound-provider">
+            <span>Current incoming mode</span>
+            <input id="settings-inbound-provider" value={inboundModeLabel} readOnly />
+          </label>
+          {inboundMode === 'gmail_oauth' && settingsDraft.emailCapture.oauthConnected ? (
+            <label className="settings-field" htmlFor="settings-gmail-account">
+              <span>Connected Gmail account</span>
+              <input id="settings-gmail-account" value={settingsDraft.emailCapture.oauthEmail} readOnly />
+            </label>
+          ) : null}
+          {inboundMode === 'gmail_oauth' ? (
+            <div className="settings-field-row">
+              <button type="button" onClick={onConnectGoogle} disabled={isSavingSettings || isSyncingEmail}>
+                Connect Gmail (OAuth)
+              </button>
+              <button
+                type="button"
+                onClick={onDisconnectGoogle}
+                disabled={!settingsDraft.emailCapture.oauthConnected || isSavingSettings || isSyncingEmail}
+              >
+                Disconnect Gmail
+              </button>
+              <button
+                type="button"
+                onClick={onSyncGoogle}
+                disabled={!settingsDraft.emailCapture.oauthConnected || isSavingSettings || isSyncingEmail}
+              >
+                {isSyncingEmail ? 'Syncing...' : 'Sync Gmail Now'}
+              </button>
+            </div>
+          ) : null}
+          {inboundMode === 'imap' ? (
+            <div className="settings-field-row">
+              <button
+                type="button"
+                onClick={onSyncImap}
+                disabled={!settingsDraft.emailCapture.imapConfigured || isSavingSettings || isSyncingEmail}
+              >
+                {isSyncingEmail ? 'Syncing...' : 'Sync IMAP Now'}
+              </button>
+            </div>
+          ) : null}
+          {inboundMode === 'imap' ? (
+            <>
+              <label className="settings-field" htmlFor="settings-imap-username">
+                <span>IMAP username</span>
+                <input
+                  id="settings-imap-username"
+                  value={settingsDraft.emailCapture.imapUsername}
+                  onChange={(event) => onUpdateSetting('emailCapture', 'imapUsername', event.target.value)}
+                  placeholder="you@example.com"
+                />
+              </label>
+              <label className="settings-field" htmlFor="settings-imap-password">
+                <span>IMAP password</span>
+                <input
+                  id="settings-imap-password"
+                  type="password"
+                  value={settingsDraft.emailCapture.imapPasswordInput}
+                  onChange={(event) => onUpdateSetting('emailCapture', 'imapPasswordInput', event.target.value)}
+                  placeholder={
+                    settingsDraft.emailCapture.imapConfigured
+                      ? 'Leave blank to keep current password'
+                      : 'Enter app password'
+                  }
+                />
+              </label>
+              <label className="settings-checkbox" htmlFor="settings-imap-clear-password">
+                <input
+                  id="settings-imap-clear-password"
+                  type="checkbox"
+                  checked={settingsDraft.emailCapture.imapClearPassword}
+                  onChange={(event) => onUpdateSetting('emailCapture', 'imapClearPassword', event.target.checked)}
+                />
+                <span>Clear stored IMAP password on save</span>
+              </label>
+              <label className="settings-field" htmlFor="settings-imap-provider">
+                <span>IMAP provider</span>
+                <select
+                  id="settings-imap-provider"
+                  value={settingsDraft.emailCapture.imapProvider}
+                  onChange={(event) => onUpdateSetting('emailCapture', 'imapProvider', event.target.value)}
+                >
+                  <option value="auto">Auto detect</option>
+                  <option value="gmail">Gmail</option>
+                  <option value="outlook">Outlook / Office 365</option>
+                  <option value="yahoo">Yahoo</option>
+                  <option value="icloud">iCloud</option>
+                  <option value="aol">AOL</option>
+                  <option value="fastmail">Fastmail</option>
+                </select>
+              </label>
+              <label className="settings-field" htmlFor="settings-imap-host">
+                <span>IMAP host (optional)</span>
+                <input
+                  id="settings-imap-host"
+                  value={settingsDraft.emailCapture.imapHost}
+                  onChange={(event) => onUpdateSetting('emailCapture', 'imapHost', event.target.value)}
+                  placeholder="imap.example.com"
+                />
+              </label>
+              <label className="settings-field" htmlFor="settings-imap-port">
+                <span>IMAP port</span>
+                <input
+                  id="settings-imap-port"
+                  type="number"
+                  min="1"
+                  max="65535"
+                  value={settingsDraft.emailCapture.imapPort}
+                  onChange={(event) => onUpdateSetting('emailCapture', 'imapPort', event.target.value)}
+                  placeholder="993"
+                />
+              </label>
+              <label className="settings-checkbox" htmlFor="settings-imap-use-ssl">
+                <input
+                  id="settings-imap-use-ssl"
+                  type="checkbox"
+                  checked={settingsDraft.emailCapture.imapUseSsl}
+                  onChange={(event) => onUpdateSetting('emailCapture', 'imapUseSsl', event.target.checked)}
+                />
+                <span>Use SSL/TLS</span>
+              </label>
+              <label className="settings-field" htmlFor="settings-imap-folder">
+                <span>IMAP folder</span>
+                <input
+                  id="settings-imap-folder"
+                  value={settingsDraft.emailCapture.imapFolder}
+                  onChange={(event) => onUpdateSetting('emailCapture', 'imapFolder', event.target.value)}
+                  placeholder="INBOX"
+                />
+              </label>
+              <label className="settings-field" htmlFor="settings-imap-search-criteria">
+                <span>IMAP search criteria</span>
+                <input
+                  id="settings-imap-search-criteria"
+                  value={settingsDraft.emailCapture.imapSearchCriteria}
+                  onChange={(event) => onUpdateSetting('emailCapture', 'imapSearchCriteria', event.target.value)}
+                  placeholder="UNSEEN"
+                />
+              </label>
+              <label className="settings-checkbox" htmlFor="settings-imap-mark-seen">
+                <input
+                  id="settings-imap-mark-seen"
+                  type="checkbox"
+                  checked={settingsDraft.emailCapture.imapMarkSeenOnSuccess}
+                  onChange={(event) =>
+                    onUpdateSetting('emailCapture', 'imapMarkSeenOnSuccess', event.target.checked)
+                  }
+                />
+                <span>Mark message as seen when imported</span>
+              </label>
+            </>
+          ) : null}
+          <label className="settings-field" htmlFor="settings-inbound-email-address">
+            <span>Inbound task email address</span>
             <input
-              id="settings-smtp-enabled"
+              id="settings-inbound-email-address"
+              type="email"
+              value={settingsDraft.emailCapture.inboundAddress}
+              onChange={(event) =>
+                onUpdateSetting('emailCapture', 'inboundAddress', event.target.value)
+              }
+              placeholder="tasks@yourdomain.com"
+            />
+          </label>
+          <label className="settings-field" htmlFor="settings-inbound-ingest-token">
+            <span>Inbound ingest token</span>
+            <input
+              id="settings-inbound-ingest-token"
+              value={settingsDraft.emailCapture.inboundToken}
+              readOnly
+              placeholder="Generated after Save Settings"
+            />
+          </label>
+          <label className="settings-checkbox" htmlFor="settings-inbound-rotate-token">
+            <input
+              id="settings-inbound-rotate-token"
               type="checkbox"
-              checked={settingsDraft.smtp.enabled}
-              onChange={(event) => onUpdateSetting('smtp', 'enabled', event.target.checked)}
+              checked={settingsDraft.emailCapture.rotateToken}
+              onChange={(event) =>
+                onUpdateSetting('emailCapture', 'rotateToken', event.target.checked)
+              }
             />
-            <span>Enable SMTP</span>
+            <span>Rotate ingest token on save</span>
           </label>
-          <div className="settings-field-row">
-            <label className="settings-field" htmlFor="settings-smtp-host">
-              <span>Host</span>
-              <input
-                id="settings-smtp-host"
-                value={settingsDraft.smtp.host}
-                onChange={(event) => onUpdateSetting('smtp', 'host', event.target.value)}
-                placeholder="smtp.example.com"
-                disabled={!settingsDraft.smtp.enabled}
-              />
-            </label>
-            <label className="settings-field settings-field-small" htmlFor="settings-smtp-port">
-              <span>Port</span>
-              <input
-                id="settings-smtp-port"
-                value={settingsDraft.smtp.port}
-                onChange={(event) => onUpdateSetting('smtp', 'port', event.target.value)}
-                placeholder="587"
-                disabled={!settingsDraft.smtp.enabled}
-              />
-            </label>
-          </div>
-          <label className="settings-field" htmlFor="settings-smtp-security">
-            <span>Security</span>
-            <select
-              id="settings-smtp-security"
-              value={settingsDraft.smtp.security}
-              onChange={(event) => onUpdateSetting('smtp', 'security', event.target.value)}
-              disabled={!settingsDraft.smtp.enabled}
-            >
-              <option value="starttls">STARTTLS</option>
-              <option value="ssl_tls">SSL/TLS</option>
-              <option value="none">None</option>
-            </select>
-          </label>
-          <label className="settings-field" htmlFor="settings-smtp-username">
-            <span>Username</span>
-            <input
-              id="settings-smtp-username"
-              value={settingsDraft.smtp.username}
-              onChange={(event) => onUpdateSetting('smtp', 'username', event.target.value)}
-              placeholder="smtp-user"
-              disabled={!settingsDraft.smtp.enabled}
+          <label className="settings-field" htmlFor="settings-inbound-whitelist">
+            <span>Sender whitelist (one email per line)</span>
+            <textarea
+              id="settings-inbound-whitelist"
+              className="settings-textarea"
+              value={settingsDraft.emailCapture.whitelistInput}
+              onChange={(event) =>
+                onUpdateSetting('emailCapture', 'whitelistInput', event.target.value)
+              }
+              placeholder={'alice@example.com\nbob@example.com'}
             />
           </label>
-          <label className="settings-field" htmlFor="settings-smtp-password">
-            <span>Password</span>
-            <input
-              id="settings-smtp-password"
-              type="password"
-              value={settingsDraft.smtp.password}
-              onChange={(event) => onUpdateSetting('smtp', 'password', event.target.value)}
-              placeholder="App password"
-              disabled={!settingsDraft.smtp.enabled}
-            />
-          </label>
-          <div className="settings-field-row">
-            <label className="settings-field" htmlFor="settings-smtp-from-name">
-              <span>From name</span>
-              <input
-                id="settings-smtp-from-name"
-                value={settingsDraft.smtp.fromName}
-                onChange={(event) => onUpdateSetting('smtp', 'fromName', event.target.value)}
-                placeholder="Task Hub"
-                disabled={!settingsDraft.smtp.enabled}
-              />
-            </label>
-            <label className="settings-field" htmlFor="settings-smtp-from-email">
-              <span>From email</span>
-              <input
-                id="settings-smtp-from-email"
-                type="email"
-                value={settingsDraft.smtp.fromEmail}
-                onChange={(event) => onUpdateSetting('smtp', 'fromEmail', event.target.value)}
-                placeholder="tasks@example.com"
-                disabled={!settingsDraft.smtp.enabled}
-              />
-            </label>
-          </div>
+          {inboundMode === 'webhook' ? (
+            <>
+              <label className="settings-field" htmlFor="settings-inbound-webhook-path">
+                <span>Inbound webhook path</span>
+                <input id="settings-inbound-webhook-path" value="/capture/email/inbound" readOnly />
+              </label>
+              <p className="settings-note">
+                Configure your mail provider to POST forwarded <code>.eml</code> files to this path with
+                header <code>X-TaskHub-Ingest-Token</code>. The forwarded body should use:
+                title, project, work/personal, priority (one per line).
+              </p>
+            </>
+          ) : null}
+          {inboundMode === 'imap' ? (
+            <p className="settings-note">
+              Enter credentials here. Host is optional and will auto-detect from provider or username domain.
+              Current configuration: {settingsDraft.emailCapture.imapConfigured ? 'ready' : 'incomplete'}.
+            </p>
+          ) : null}
+          {inboundMode === 'gmail_oauth' ? (
+            <p className="settings-note">
+            Gmail OAuth mode reads unread inbox email directly from Google and imports matching messages.
+            </p>
+          ) : null}
+          <p className="settings-note">
+            When whitelist entries are set, only those sender addresses can create tasks. Leave blank to
+            allow all senders.
+          </p>
         </div>
       )
     }
@@ -1166,13 +1549,27 @@ function SettingsPage({
       <div className="settings-header">
         <div>
           <h1>Settings</h1>
-          <p>Configure user profile, SMTP email delivery, AI/privacy, and task list defaults.</p>
+          <p>Configure user profile, incoming email capture, AI/privacy, and task list defaults.</p>
         </div>
         <button type="button" onClick={onBackToTasks}>
           Back To Tasks
         </button>
       </div>
       <form className="settings-form" onSubmit={onSaveSettings}>
+        <label className="settings-mobile-section" htmlFor="settings-mobile-section">
+          <span>Section</span>
+          <select
+            id="settings-mobile-section"
+            value={activeSectionMeta.id}
+            onChange={(event) => setActiveSection(event.target.value)}
+          >
+            {sections.map((section) => (
+              <option key={section.id} value={section.id}>
+                {section.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="settings-layout">
           <aside className="settings-nav-sidebar" aria-label="Settings sections">
             <p className="settings-nav-title">Sections</p>
@@ -1203,13 +1600,15 @@ function SettingsPage({
           </section>
         </div>
         <div className="settings-actions">
-          <button type="submit">Save Settings</button>
-          <button type="button" className="settings-reset" onClick={onResetSettings}>
+          <button type="submit" disabled={isSavingSettings}>
+            {isSavingSettings ? 'Saving...' : 'Save Settings'}
+          </button>
+          <button type="button" className="settings-reset" onClick={onResetSettings} disabled={isSavingSettings}>
             Reset To Defaults
           </button>
           <p className="settings-note">
-            Profile and preference settings are currently stored per-browser. Backup/restore runs against
-            the backend database.
+            Incoming email settings are stored on the backend organization. Profile and list preferences
+            remain per-browser. Backup/restore runs against the backend database.
           </p>
         </div>
         {settingsSavedMessage ? <p className="settings-saved-message">{settingsSavedMessage}</p> : null}
@@ -1233,6 +1632,8 @@ function Dashboard({ token, onLogout }) {
   const [includeHistory, setIncludeHistory] = useState(false)
   const [settingsDraft, setSettingsDraft] = useState(initialSettings)
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('')
+  const [isSavingSettings, setIsSavingSettings] = useState(false)
+  const [isSyncingEmail, setIsSyncingEmail] = useState(false)
   const [error, setError] = useState('')
   const [reloadCounter, setReloadCounter] = useState(0)
   const [updatingTaskIds, setUpdatingTaskIds] = useState(new Set())
@@ -1245,6 +1646,8 @@ function Dashboard({ token, onLogout }) {
   const [detailsAttachments, setDetailsAttachments] = useState([])
   const [isAttachmentDragOver, setIsAttachmentDragOver] = useState(false)
   const [attachmentPreview, setAttachmentPreview] = useState(null)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [isMobileQuickAddOpen, setIsMobileQuickAddOpen] = useState(false)
   const projectNameById = useMemo(
     () => Object.fromEntries(projects.map((project) => [project.id, project.name])),
     [projects]
@@ -1347,6 +1750,11 @@ function Dashboard({ token, onLogout }) {
   }, [attachmentPreview])
 
   useEffect(() => {
+    setIsSidebarOpen(false)
+    setIsMobileQuickAddOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
     let active = true
     getProjects(token)
       .then((projectData) => {
@@ -1363,6 +1771,66 @@ function Dashboard({ token, onLogout }) {
       active = false
     }
   }, [token])
+
+  useEffect(() => {
+    let active = true
+    getEmailCaptureSettings(token)
+      .then((emailCaptureData) => {
+        if (!active) return
+        setSettingsDraft((current) => ({
+          ...current,
+          emailCapture: emailCaptureSettingsFromApi(emailCaptureData),
+        }))
+      })
+      .catch((e) => {
+        if (!active) return
+        setSettingsSavedMessage(`Could not load incoming email settings: ${e.message}`)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [token])
+
+  useEffect(() => {
+    if (!isSettingsView) {
+      return
+    }
+    const params = new URLSearchParams(location.search)
+    const code = (params.get('code') || '').trim()
+    const state = (params.get('state') || '').trim()
+    if (!code || !state) {
+      return
+    }
+
+    let active = true
+    setIsSavingSettings(true)
+    setSettingsSavedMessage('Completing Gmail OAuth...')
+
+    exchangeGoogleEmailOAuthCode(token, code, state)
+      .then((emailCaptureData) => {
+        if (!active) return
+        setSettingsDraft((current) => ({
+          ...current,
+          emailCapture: emailCaptureSettingsFromApi(emailCaptureData),
+        }))
+        setSettingsSavedMessage('Gmail OAuth connected.')
+        navigate('/settings', { replace: true })
+      })
+      .catch((e) => {
+        if (!active) return
+        setSettingsSavedMessage(`Gmail OAuth failed: ${e.message}`)
+        navigate('/settings', { replace: true })
+      })
+      .finally(() => {
+        if (!active) return
+        setIsSavingSettings(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [isSettingsView, location.search, navigate, token])
 
   useEffect(() => {
     if (isSettingsView) {
@@ -1389,6 +1857,7 @@ function Dashboard({ token, onLogout }) {
 
   function handleTaskCreated() {
     setReloadCounter((value) => value + 1)
+    setIsMobileQuickAddOpen(false)
   }
 
   function handleProjectCreated(project) {
@@ -1402,12 +1871,16 @@ function Dashboard({ token, onLogout }) {
 
   function openTaskView(nextView) {
     setActiveView(nextView)
+    setIsSidebarOpen(false)
+    setIsMobileQuickAddOpen(false)
     if (isSettingsView) {
-      navigate('/')
+      navigate('/tasks')
     }
   }
 
   function openSettingsView() {
+    setIsSidebarOpen(false)
+    setIsMobileQuickAddOpen(false)
     navigate('/settings')
   }
 
@@ -1422,25 +1895,89 @@ function Dashboard({ token, onLogout }) {
     }))
   }
 
-  function handleSaveSettings(event) {
+  async function handleSaveSettings(event) {
     event.preventDefault()
-    saveAppSettings(settingsDraft)
-    setSettingsSavedMessage('Settings saved.')
-    setGroupByPriority(Boolean(settingsDraft.taskList.groupByPriorityDefault))
-    if (settingsDraft.taskList.defaultArea === 'work') {
-      setActiveView({ type: 'area', area: 'work' })
-    } else if (settingsDraft.taskList.defaultArea === 'personal') {
-      setActiveView({ type: 'area', area: 'personal' })
-    } else {
-      setActiveView({ type: 'all' })
+
+    setIsSavingSettings(true)
+    setSettingsSavedMessage('')
+
+    const localSettings = {
+      ...settingsDraft,
+      emailCapture: {
+        ...settingsDraft.emailCapture,
+        rotateToken: false,
+      },
+    }
+
+    let nextSettings = localSettings
+    let saveMessage = 'Settings saved.'
+
+    try {
+      try {
+        const emailCaptureData = await updateEmailCaptureSettings(token, {
+          inboundEmailAddress: settingsDraft.emailCapture.inboundAddress.trim(),
+          inboundEmailWhitelist: parseEmailWhitelistInput(settingsDraft.emailCapture.whitelistInput),
+          rotateToken: settingsDraft.emailCapture.rotateToken,
+          imapUsername: settingsDraft.emailCapture.imapUsername.trim(),
+          imapPassword: settingsDraft.emailCapture.imapPasswordInput,
+          imapClearPassword: settingsDraft.emailCapture.imapClearPassword,
+          imapHost: settingsDraft.emailCapture.imapHost.trim(),
+          imapProvider: settingsDraft.emailCapture.imapProvider,
+          imapPort: Number(settingsDraft.emailCapture.imapPort || 993),
+          imapUseSsl: settingsDraft.emailCapture.imapUseSsl,
+          imapFolder: settingsDraft.emailCapture.imapFolder.trim(),
+          imapSearchCriteria: settingsDraft.emailCapture.imapSearchCriteria.trim(),
+          imapMarkSeenOnSuccess: settingsDraft.emailCapture.imapMarkSeenOnSuccess,
+        })
+        nextSettings = {
+          ...localSettings,
+          emailCapture: emailCaptureSettingsFromApi(emailCaptureData),
+        }
+      } catch (e) {
+        saveMessage = `Local settings saved. Incoming email settings were not saved: ${e.message}`
+      }
+
+      setSettingsDraft(nextSettings)
+      saveAppSettings(nextSettings)
+      setSettingsSavedMessage(saveMessage)
+      setGroupByPriority(Boolean(nextSettings.taskList.groupByPriorityDefault))
+      if (nextSettings.taskList.defaultArea === 'work') {
+        setActiveView({ type: 'area', area: 'work' })
+      } else if (nextSettings.taskList.defaultArea === 'personal') {
+        setActiveView({ type: 'area', area: 'personal' })
+      } else {
+        setActiveView({ type: 'all' })
+      }
+    } finally {
+      setIsSavingSettings(false)
     }
   }
 
   function handleResetSettings() {
     const reset = cloneDefaultAppSettings()
+    reset.emailCapture = {
+      inboundAddress: settingsDraft.emailCapture.inboundAddress,
+      inboundToken: settingsDraft.emailCapture.inboundToken,
+      whitelistInput: settingsDraft.emailCapture.whitelistInput,
+      provider: settingsDraft.emailCapture.provider,
+      oauthEmail: settingsDraft.emailCapture.oauthEmail,
+      oauthConnected: settingsDraft.emailCapture.oauthConnected,
+      imapConfigured: settingsDraft.emailCapture.imapConfigured,
+      imapUsername: settingsDraft.emailCapture.imapUsername,
+      imapPasswordInput: '',
+      imapClearPassword: false,
+      imapHost: settingsDraft.emailCapture.imapHost,
+      imapProvider: settingsDraft.emailCapture.imapProvider,
+      imapPort: settingsDraft.emailCapture.imapPort,
+      imapUseSsl: settingsDraft.emailCapture.imapUseSsl,
+      imapFolder: settingsDraft.emailCapture.imapFolder,
+      imapSearchCriteria: settingsDraft.emailCapture.imapSearchCriteria,
+      imapMarkSeenOnSuccess: settingsDraft.emailCapture.imapMarkSeenOnSuccess,
+      rotateToken: false,
+    }
     setSettingsDraft(reset)
     saveAppSettings(reset)
-    setSettingsSavedMessage('Settings reset to defaults.')
+    setSettingsSavedMessage('Local settings reset to defaults. Incoming email settings were preserved.')
     setGroupByPriority(Boolean(reset.taskList.groupByPriorityDefault))
     setActiveView({ type: 'all' })
   }
@@ -1490,6 +2027,89 @@ function Dashboard({ token, onLogout }) {
         next.delete(taskId)
         return next
       })
+    }
+  }
+
+  async function handleConnectGoogleOAuth() {
+    setSettingsSavedMessage('')
+    setIsSavingSettings(true)
+    try {
+      const data = await initiateGoogleEmailOAuth(token)
+      const authUrl = String(data?.auth_url || '')
+      if (!authUrl) {
+        throw new Error('OAuth authorization URL was not returned')
+      }
+      window.location.assign(authUrl)
+    } catch (e) {
+      setSettingsSavedMessage(`Could not start Gmail OAuth: ${e.message}`)
+      setIsSavingSettings(false)
+    }
+  }
+
+  async function handleDisconnectGoogleOAuth() {
+    setSettingsSavedMessage('')
+    setIsSavingSettings(true)
+    try {
+      const data = await disconnectGoogleEmailOAuth(token)
+      setSettingsDraft((current) => ({
+        ...current,
+        emailCapture: emailCaptureSettingsFromApi(data),
+      }))
+      setSettingsSavedMessage('Gmail OAuth disconnected.')
+    } catch (e) {
+      setSettingsSavedMessage(`Could not disconnect Gmail OAuth: ${e.message}`)
+    } finally {
+      setIsSavingSettings(false)
+    }
+  }
+
+  async function handleSyncGoogleOAuth() {
+    setSettingsSavedMessage('')
+    setIsSyncingEmail(true)
+    try {
+      const data = await syncGoogleEmailOAuth(token, 15)
+      const created = Number(data?.created || 0)
+      const processed = Number(data?.processed || 0)
+      const failedCount = Array.isArray(data?.failed) ? data.failed.length : 0
+      setSettingsSavedMessage(
+        `Gmail sync complete: processed ${processed}, created ${created}, failed ${failedCount}.`
+      )
+      if (data?.settings) {
+        setSettingsDraft((current) => ({
+          ...current,
+          emailCapture: emailCaptureSettingsFromApi(data.settings),
+        }))
+      }
+      setReloadCounter((value) => value + 1)
+    } catch (e) {
+      setSettingsSavedMessage(`Gmail sync failed: ${e.message}`)
+    } finally {
+      setIsSyncingEmail(false)
+    }
+  }
+
+  async function handleSyncImap() {
+    setSettingsSavedMessage('')
+    setIsSyncingEmail(true)
+    try {
+      const data = await syncImapEmail(token, 25)
+      const created = Number(data?.created || 0)
+      const processed = Number(data?.processed || 0)
+      const failedCount = Array.isArray(data?.failed) ? data.failed.length : 0
+      setSettingsSavedMessage(
+        `IMAP sync complete: processed ${processed}, created ${created}, failed ${failedCount}.`
+      )
+      if (data?.settings) {
+        setSettingsDraft((current) => ({
+          ...current,
+          emailCapture: emailCaptureSettingsFromApi(data.settings),
+        }))
+      }
+      setReloadCounter((value) => value + 1)
+    } catch (e) {
+      setSettingsSavedMessage(`IMAP sync failed: ${e.message}`)
+    } finally {
+      setIsSyncingEmail(false)
     }
   }
 
@@ -1756,10 +2376,124 @@ function Dashboard({ token, onLogout }) {
     }
   }
 
+  function renderTaskDetailsPanel(task) {
+    return (
+      <div className="task-details-panel">
+        <div className="task-details-section">
+          <label htmlFor={`task-notes-${task.id}`}>Notes</label>
+          <textarea
+            id={`task-notes-${task.id}`}
+            className="task-details-notes"
+            value={detailsNotes}
+            disabled={updatingTaskIds.has(task.id)}
+            onChange={(e) => setDetailsNotes(e.target.value)}
+            placeholder="Add notes, email context, or other details."
+          />
+        </div>
+        <div className="task-details-section">
+          <label>Attachments</label>
+          <div
+            className={
+              isAttachmentDragOver
+                ? 'task-attachment-dropzone task-attachment-dropzone-active'
+                : 'task-attachment-dropzone'
+            }
+            onDragOver={handleAttachmentDragOver}
+            onDragLeave={handleAttachmentDragLeave}
+            onDrop={(event) => handleAttachmentDrop(task, event)}
+          >
+            <p>Drag and drop files here</p>
+            <p className="task-attachment-dropzone-sub">or</p>
+            <label className="task-attachment-upload-label">
+              <input
+                type="file"
+                multiple
+                disabled={updatingTaskIds.has(task.id)}
+                onChange={(event) => handleAttachmentInputChange(task, event)}
+              />
+              Select files
+            </label>
+          </div>
+          {detailsAttachments.length ? (
+            <ul className="task-attachment-list">
+              {detailsAttachments.map((attachment, index) => {
+                const previewType = attachmentPreviewType(attachment)
+                return (
+                  <li key={`${attachment.url}-${index}`} className="task-attachment-item">
+                    <a
+                      className="task-attachment-link"
+                      href={attachment.url}
+                      target={previewType ? undefined : '_blank'}
+                      rel={previewType ? undefined : 'noreferrer'}
+                      onClick={(event) => handleAttachmentTitleClick(event, attachment)}
+                    >
+                      {attachment.name}
+                    </a>
+                    <div className="task-attachment-actions">
+                      {previewType ? (
+                        <button
+                          type="button"
+                          className="task-attachment-preview"
+                          onClick={() => openAttachmentPreview(attachment)}
+                          aria-label={`View ${attachment.name}`}
+                          title={`View ${attachment.name}`}
+                        >
+                          <EyeIcon />
+                        </button>
+                      ) : null}
+                      <a
+                        className="task-attachment-download"
+                        href={attachment.url}
+                        download={attachment.name}
+                        aria-label={`Download ${attachment.name}`}
+                        title={`Download ${attachment.name}`}
+                      >
+                        <DownloadIcon />
+                      </a>
+                      <button
+                        type="button"
+                        className="task-attachment-remove"
+                        disabled={updatingTaskIds.has(task.id)}
+                        onClick={() => handleRemoveAttachmentDraft(index)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <p className="task-details-empty">No attachments yet.</p>
+          )}
+        </div>
+        <div className="task-details-actions">
+          <button
+            type="button"
+            disabled={updatingTaskIds.has(task.id)}
+            onClick={() => handleSaveTaskDetails(task)}
+          >
+            {updatingTaskIds.has(task.id) ? 'Saving...' : 'Save details'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="layout">
+    <div className={isSidebarOpen ? 'layout layout-sidebar-open' : 'layout'}>
       <aside className="sidebar">
-        <h2>Views</h2>
+        <div className="sidebar-mobile-header">
+          <h2>Views</h2>
+          <button
+            type="button"
+            className="sidebar-mobile-close"
+            onClick={() => setIsSidebarOpen(false)}
+            aria-label="Close views menu"
+          >
+            Close
+          </button>
+        </div>
         <ul className="view-list">
           <li>
             <button
@@ -1874,17 +2608,38 @@ function Dashboard({ token, onLogout }) {
           </button>
         </div>
       </aside>
+      {isSidebarOpen ? (
+        <button
+          type="button"
+          className="mobile-sidebar-backdrop"
+          onClick={() => setIsSidebarOpen(false)}
+          aria-label="Close views menu"
+        />
+      ) : null}
 
       <main className="main">
         <header className="topbar">
+          <button
+            type="button"
+            className="mobile-sidebar-open"
+            onClick={() => setIsSidebarOpen(true)}
+            aria-label="Open views menu"
+            title="Views"
+          >
+            ☰
+          </button>
           <div className="topbar-main">
             {isSettingsView ? (
               <div className="settings-topbar-summary">
                 <h1>App Settings</h1>
-                <p>Manage profile defaults, SMTP email delivery, privacy, and task list behavior.</p>
+                <p>Manage profile defaults, incoming email capture, privacy, and task list behavior.</p>
               </div>
             ) : (
               <>
+                <div className="mobile-list-heading">
+                  <h2>{activeViewLabel}</h2>
+                  <p>{taskCountLabel}</p>
+                </div>
                 <div className="search-row">
                   <input placeholder="Search tasks" aria-label="Search tasks" />
                   <div className="search-toggles">
@@ -1903,8 +2658,50 @@ function Dashboard({ token, onLogout }) {
               </>
             )}
           </div>
-          <button onClick={onLogout}>Log Out</button>
+          {!isSettingsView ? (
+            <button
+              type="button"
+              className="mobile-quick-add-trigger"
+              onClick={() => setIsMobileQuickAddOpen(true)}
+              aria-label="Add task"
+              title="Add task"
+            >
+              +
+            </button>
+          ) : null}
+          <button className="topbar-logout" onClick={onLogout}>
+            Log Out
+          </button>
         </header>
+
+        {!isSettingsView && isMobileQuickAddOpen ? (
+          <div
+            className="mobile-quick-add-sheet-backdrop"
+            role="presentation"
+            onClick={() => setIsMobileQuickAddOpen(false)}
+          >
+            <div
+              className="mobile-quick-add-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Add task"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="mobile-quick-add-sheet-header">
+                <h2>Add Task</h2>
+                <button type="button" onClick={() => setIsMobileQuickAddOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <QuickAdd
+                token={token}
+                projects={projects}
+                onTaskCreated={handleTaskCreated}
+                onProjectCreated={handleProjectCreated}
+              />
+            </div>
+          </div>
+        ) : null}
 
         {isSettingsView ? (
           <section className="content">
@@ -1912,265 +2709,252 @@ function Dashboard({ token, onLogout }) {
               token={token}
               settingsDraft={settingsDraft}
               settingsSavedMessage={settingsSavedMessage}
+              isSavingSettings={isSavingSettings}
+              isSyncingEmail={isSyncingEmail}
               onUpdateSetting={handleUpdateSetting}
               onSaveSettings={handleSaveSettings}
               onResetSettings={handleResetSettings}
-              onBackToTasks={() => navigate('/')}
+              onConnectGoogle={handleConnectGoogleOAuth}
+              onDisconnectGoogle={handleDisconnectGoogleOAuth}
+              onSyncGoogle={handleSyncGoogleOAuth}
+              onSyncImap={handleSyncImap}
+              onBackToTasks={() => navigate('/tasks')}
             />
           </section>
         ) : (
           <section className="content">
-            <h1>{activeViewLabel}</h1>
-            <p>{taskCountLabel}</p>
+            <h1 className="tasks-page-title">{activeViewLabel}</h1>
+            <p className="tasks-page-count">{taskCountLabel}</p>
             {error ? <p className="error-text">{error}</p> : null}
-            <table className="tasks-table">
-            <thead>
-              <tr>
-                <th className="expand-header"></th>
-                <th className="drag-header"></th>
-                <th>Done</th>
-                <th>Title</th>
-                <th>Area</th>
-                <th>Project</th>
-                <th>Priority</th>
-                <th>Created</th>
-                <th className="actions-header"></th>
-              </tr>
-            </thead>
-            <tbody onDragOver={handleBodyDragOver} onDrop={handleBodyDrop}>
+            <div className="mobile-task-list" role="list">
               {filteredTasks.map((task) => (
-                <Fragment key={task.id}>
-                  <tr
-                    data-task-id={task.id}
-                    className={[
-                      task.status === 'done' ? 'task-row-done' : '',
-                      openDeleteTaskId === task.id ? 'task-row-actions-open' : '',
-                      dropTarget?.taskId === task.id && dropTarget.position === 'before'
-                        ? 'task-row-drop-before'
-                        : '',
-                      dropTarget?.taskId === task.id && dropTarget.position === 'after'
-                        ? 'task-row-drop-after'
-                        : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ')}
-                    onDragOver={(event) => handleRowDragOver(event, task.id)}
-                    onDrop={(event) => handleRowDrop(event, task.id)}
-                  >
-                    <td className="expand-cell">
-                      <div className="task-cell-content">
-                        <button
-                          type="button"
-                          className={
-                            expandedTaskId === task.id
-                              ? 'task-expand-toggle task-expand-toggle-open'
-                              : 'task-expand-toggle'
-                          }
-                          onClick={() => toggleTaskDetails(task)}
-                          aria-label={
-                            expandedTaskId === task.id
-                              ? `Collapse details for ${task.title}`
-                              : `Expand details for ${task.title}`
-                          }
-                        >
-                          ▶
-                        </button>
-                      </div>
-                    </td>
-                    <td className="drag-cell">
-                      <button
-                        type="button"
-                        className="task-grabber"
-                        draggable
-                        onDragStart={(event) => handleDragStart(event, task.id)}
-                        onDragEnd={clearDragState}
-                        aria-label={`Reorder ${task.title}`}
-                      >
-                        ⋮⋮
-                      </button>
-                    </td>
-                    <td className="complete-cell">
-                      <div className="task-cell-content">
-                        <input
-                          type="checkbox"
-                          className="task-complete-checkbox"
-                          checked={task.status === 'done'}
-                          disabled={updatingTaskIds.has(task.id) || task.status === 'archived'}
-                          onChange={(e) => handleToggleComplete(task, e.target.checked)}
-                          aria-label={`Mark ${task.title} as complete`}
-                        />
-                      </div>
-                    </td>
-                    <td>
-                      <div className="task-cell-content">{task.title}</div>
-                    </td>
-                    <td>
-                      <div className="task-cell-content">{formatAreaLabel(task.area)}</div>
-                    </td>
-                    <td>
-                      <div className="task-cell-content">
-                        {task.project ? projectNameById[task.project] || 'Unknown project' : 'None'}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="task-cell-content">
-                        <select
-                          className={`task-priority-select ${priorityClassFromLevel(
-                            priorityLevelFromValue(task.priority)
-                          )}`.trim()}
-                          value={priorityLevelFromValue(task.priority)}
-                          disabled={updatingTaskIds.has(task.id)}
-                          onChange={(e) => handlePriorityChange(task, e.target.value)}
-                          aria-label={`Set priority for ${task.title}`}
-                        >
-                          {PRIORITY_OPTIONS.map((option) => (
-                            <option key={option.value || 'none'} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="task-cell-content">
+                <article
+                  key={`mobile-${task.id}`}
+                  className={task.status === 'done' ? 'mobile-task-item mobile-task-item-done' : 'mobile-task-item'}
+                  role="listitem"
+                >
+                  <div className="mobile-task-row">
+                    <input
+                      type="checkbox"
+                      className="mobile-task-complete"
+                      checked={task.status === 'done'}
+                      disabled={updatingTaskIds.has(task.id) || task.status === 'archived'}
+                      onChange={(event) => handleToggleComplete(task, event.target.checked)}
+                      aria-label={`Mark ${task.title} as complete`}
+                    />
+                    <div className="mobile-task-copy">
+                      <p className="mobile-task-title">{task.title}</p>
+                      <p className="mobile-task-meta">
+                        {formatAreaLabel(task.area)}
+                        {task.project ? ` • ${projectNameById[task.project] || 'Unknown project'}` : ''}
+                      </p>
+                      <p className="mobile-task-submeta">
+                        {priorityLabelFromValue(task.priority)} •{' '}
                         {formatCreatedTimestamp(task.created_at || task.created)}
-                      </div>
-                    </td>
-                    <td className="task-action-cell" data-task-action-id={task.id}>
+                      </p>
+                    </div>
+                    <div className="mobile-task-actions">
                       <button
                         type="button"
-                        className="task-minus"
-                        onClick={() => toggleDeleteReveal(task.id)}
-                        aria-label={
-                          openDeleteTaskId === task.id ? 'Hide delete action' : 'Show delete action'
+                        className={
+                          expandedTaskId === task.id
+                            ? 'mobile-task-action mobile-task-action-active'
+                            : 'mobile-task-action'
                         }
+                        onClick={() => toggleTaskDetails(task)}
+                        aria-label={
+                          expandedTaskId === task.id
+                            ? `Collapse details for ${task.title}`
+                            : `Expand details for ${task.title}`
+                        }
+                      >
+                        i
+                      </button>
+                      <button
+                        type="button"
+                        className={
+                          openDeleteTaskId === task.id
+                            ? 'mobile-task-action mobile-task-action-delete mobile-task-action-active'
+                            : 'mobile-task-action mobile-task-action-delete'
+                        }
+                        onClick={() => toggleDeleteReveal(task.id)}
+                        aria-label={openDeleteTaskId === task.id ? 'Hide delete action' : 'Show delete action'}
                       >
                         −
                       </button>
+                    </div>
+                  </div>
+                  {openDeleteTaskId === task.id ? (
+                    <div className="mobile-task-delete">
                       <button
                         type="button"
-                        className="task-delete"
+                        className="mobile-task-delete-button"
                         onClick={() => handleDeleteTask(task.id)}
                         disabled={deletingTaskIds.has(task.id)}
                       >
-                        {deletingTaskIds.has(task.id) ? 'Deleting...' : 'Delete'}
+                        {deletingTaskIds.has(task.id) ? 'Deleting...' : 'Delete task'}
                       </button>
-                    </td>
-                  </tr>
+                    </div>
+                  ) : null}
                   {expandedTaskId === task.id ? (
-                    <tr className={task.status === 'done' ? 'task-details-row task-row-done' : 'task-details-row'}>
-                      <td colSpan={9} className="task-details-cell">
-                        <div className="task-details-panel">
-                          <div className="task-details-section">
-                            <label htmlFor={`task-notes-${task.id}`}>Notes</label>
-                            <textarea
-                              id={`task-notes-${task.id}`}
-                              className="task-details-notes"
-                              value={detailsNotes}
-                              disabled={updatingTaskIds.has(task.id)}
-                              onChange={(e) => setDetailsNotes(e.target.value)}
-                              placeholder="Add notes, email context, or other details."
-                            />
-                          </div>
-                          <div className="task-details-section">
-                            <label>Attachments</label>
-                            <div
-                              className={
-                                isAttachmentDragOver
-                                  ? 'task-attachment-dropzone task-attachment-dropzone-active'
-                                  : 'task-attachment-dropzone'
-                              }
-                              onDragOver={handleAttachmentDragOver}
-                              onDragLeave={handleAttachmentDragLeave}
-                              onDrop={(event) => handleAttachmentDrop(task, event)}
-                            >
-                              <p>Drag and drop files here</p>
-                              <p className="task-attachment-dropzone-sub">or</p>
-                              <label className="task-attachment-upload-label">
-                                <input
-                                  type="file"
-                                  multiple
-                                  disabled={updatingTaskIds.has(task.id)}
-                                  onChange={(event) => handleAttachmentInputChange(task, event)}
-                                />
-                                Select files
-                              </label>
-                            </div>
-                            {detailsAttachments.length ? (
-                              <ul className="task-attachment-list">
-                                {detailsAttachments.map((attachment, index) => {
-                                  const previewType = attachmentPreviewType(attachment)
-                                  return (
-                                    <li key={`${attachment.url}-${index}`} className="task-attachment-item">
-                                      <a
-                                        className="task-attachment-link"
-                                        href={attachment.url}
-                                        target={previewType ? undefined : '_blank'}
-                                        rel={previewType ? undefined : 'noreferrer'}
-                                        onClick={(event) => handleAttachmentTitleClick(event, attachment)}
-                                      >
-                                        {attachment.name}
-                                      </a>
-                                      <div className="task-attachment-actions">
-                                        {previewType ? (
-                                          <button
-                                            type="button"
-                                            className="task-attachment-preview"
-                                            onClick={() => openAttachmentPreview(attachment)}
-                                            aria-label={`View ${attachment.name}`}
-                                            title={`View ${attachment.name}`}
-                                          >
-                                            <EyeIcon />
-                                          </button>
-                                        ) : null}
-                                        <a
-                                          className="task-attachment-download"
-                                          href={attachment.url}
-                                          download={attachment.name}
-                                          aria-label={`Download ${attachment.name}`}
-                                          title={`Download ${attachment.name}`}
-                                        >
-                                          <DownloadIcon />
-                                        </a>
-                                        <button
-                                          type="button"
-                                          className="task-attachment-remove"
-                                          disabled={updatingTaskIds.has(task.id)}
-                                          onClick={() => handleRemoveAttachmentDraft(index)}
-                                        >
-                                          Remove
-                                        </button>
-                                      </div>
-                                    </li>
-                                  )
-                                })}
-                              </ul>
-                            ) : (
-                              <p className="task-details-empty">No attachments yet.</p>
-                            )}
-                          </div>
-                          <div className="task-details-actions">
+                    <div className="mobile-task-details">{renderTaskDetailsPanel(task)}</div>
+                  ) : null}
+                </article>
+              ))}
+              {!filteredTasks.length ? <p className="mobile-task-empty">No tasks in this view.</p> : null}
+            </div>
+            <div className="tasks-table-wrap">
+              <table className="tasks-table">
+                <thead>
+                  <tr>
+                    <th className="expand-header"></th>
+                    <th className="drag-header"></th>
+                    <th>Done</th>
+                    <th>Title</th>
+                    <th>Area</th>
+                    <th>Project</th>
+                    <th>Priority</th>
+                    <th>Created</th>
+                    <th className="actions-header"></th>
+                  </tr>
+                </thead>
+                <tbody onDragOver={handleBodyDragOver} onDrop={handleBodyDrop}>
+                  {filteredTasks.map((task) => (
+                    <Fragment key={task.id}>
+                      <tr
+                        data-task-id={task.id}
+                        className={[
+                          task.status === 'done' ? 'task-row-done' : '',
+                          openDeleteTaskId === task.id ? 'task-row-actions-open' : '',
+                          dropTarget?.taskId === task.id && dropTarget.position === 'before'
+                            ? 'task-row-drop-before'
+                            : '',
+                          dropTarget?.taskId === task.id && dropTarget.position === 'after'
+                            ? 'task-row-drop-after'
+                            : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        onDragOver={(event) => handleRowDragOver(event, task.id)}
+                        onDrop={(event) => handleRowDrop(event, task.id)}
+                      >
+                        <td className="expand-cell">
+                          <div className="task-cell-content">
                             <button
                               type="button"
-                              disabled={updatingTaskIds.has(task.id)}
-                              onClick={() => handleSaveTaskDetails(task)}
+                              className={
+                                expandedTaskId === task.id
+                                  ? 'task-expand-toggle task-expand-toggle-open'
+                                  : 'task-expand-toggle'
+                              }
+                              onClick={() => toggleTaskDetails(task)}
+                              aria-label={
+                                expandedTaskId === task.id
+                                  ? `Collapse details for ${task.title}`
+                                  : `Expand details for ${task.title}`
+                              }
                             >
-                              {updatingTaskIds.has(task.id) ? 'Saving...' : 'Save details'}
+                              ▶
                             </button>
                           </div>
-                        </div>
-                      </td>
+                        </td>
+                        <td className="drag-cell">
+                          <button
+                            type="button"
+                            className="task-grabber"
+                            draggable
+                            onDragStart={(event) => handleDragStart(event, task.id)}
+                            onDragEnd={clearDragState}
+                            aria-label={`Reorder ${task.title}`}
+                          >
+                            ⋮⋮
+                          </button>
+                        </td>
+                        <td className="complete-cell">
+                          <div className="task-cell-content">
+                            <input
+                              type="checkbox"
+                              className="task-complete-checkbox"
+                              checked={task.status === 'done'}
+                              disabled={updatingTaskIds.has(task.id) || task.status === 'archived'}
+                              onChange={(e) => handleToggleComplete(task, e.target.checked)}
+                              aria-label={`Mark ${task.title} as complete`}
+                            />
+                          </div>
+                        </td>
+                        <td>
+                          <div className="task-cell-content">{task.title}</div>
+                        </td>
+                        <td>
+                          <div className="task-cell-content">{formatAreaLabel(task.area)}</div>
+                        </td>
+                        <td>
+                          <div className="task-cell-content">
+                            {task.project ? projectNameById[task.project] || 'Unknown project' : 'None'}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="task-cell-content">
+                            <select
+                              className={`task-priority-select ${priorityClassFromLevel(
+                                priorityLevelFromValue(task.priority)
+                              )}`.trim()}
+                              value={priorityLevelFromValue(task.priority)}
+                              disabled={updatingTaskIds.has(task.id)}
+                              onChange={(e) => handlePriorityChange(task, e.target.value)}
+                              aria-label={`Set priority for ${task.title}`}
+                            >
+                              {PRIORITY_OPTIONS.map((option) => (
+                                <option key={option.value || 'none'} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </td>
+                        <td>
+                          <div className="task-cell-content">
+                            {formatCreatedTimestamp(task.created_at || task.created)}
+                          </div>
+                        </td>
+                        <td className="task-action-cell" data-task-action-id={task.id}>
+                          <button
+                            type="button"
+                            className="task-minus"
+                            onClick={() => toggleDeleteReveal(task.id)}
+                            aria-label={
+                              openDeleteTaskId === task.id ? 'Hide delete action' : 'Show delete action'
+                            }
+                          >
+                            −
+                          </button>
+                          <button
+                            type="button"
+                            className="task-delete"
+                            onClick={() => handleDeleteTask(task.id)}
+                            disabled={deletingTaskIds.has(task.id)}
+                          >
+                            {deletingTaskIds.has(task.id) ? 'Deleting...' : 'Delete'}
+                          </button>
+                        </td>
+                      </tr>
+                      {expandedTaskId === task.id ? (
+                        <tr className={task.status === 'done' ? 'task-details-row task-row-done' : 'task-details-row'}>
+                          <td colSpan={9} className="task-details-cell">
+                            {renderTaskDetailsPanel(task)}
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  ))}
+                  {!filteredTasks.length ? (
+                    <tr>
+                      <td colSpan={9}>No tasks in this view.</td>
                     </tr>
                   ) : null}
-                </Fragment>
-              ))}
-              {!filteredTasks.length ? (
-                <tr>
-                  <td colSpan={9}>No tasks in this view.</td>
-                </tr>
-              ) : null}
-            </tbody>
-            </table>
+                </tbody>
+              </table>
+            </div>
           </section>
         )}
       </main>
@@ -2201,9 +2985,13 @@ function Dashboard({ token, onLogout }) {
             <div className="attachment-preview-body">
               {attachmentPreview.previewType === 'image' ? (
                 <img src={attachmentPreview.url} alt={attachmentPreview.name} />
-              ) : (
+              ) : null}
+              {attachmentPreview.previewType === 'pdf' ? (
                 <PdfCanvasViewer url={attachmentPreview.url} fileName={attachmentPreview.name} />
-              )}
+              ) : null}
+              {attachmentPreview.previewType === 'text' ? (
+                <TextAttachmentViewer url={attachmentPreview.url} />
+              ) : null}
             </div>
           </div>
         </div>
@@ -2213,6 +3001,7 @@ function Dashboard({ token, onLogout }) {
 }
 
 function QuickAddMobile({ token }) {
+  const navigate = useNavigate()
   const [projects, setProjects] = useState([])
   const [error, setError] = useState('')
 
@@ -2236,7 +3025,17 @@ function QuickAddMobile({ token }) {
 
   return (
     <div className="mobile-quick-add">
-      <h1>Quick Add</h1>
+      <header className="mobile-quick-add-header">
+        <h1>Quick Add</h1>
+        <div className="mobile-quick-add-actions">
+          <button type="button" onClick={() => navigate('/tasks')}>
+            Tasks
+          </button>
+          <button type="button" onClick={() => navigate('/settings')}>
+            Settings
+          </button>
+        </div>
+      </header>
       {error ? <p className="error-text">{error}</p> : null}
       <QuickAdd
         token={token}
@@ -2255,28 +3054,73 @@ function QuickAddMobile({ token }) {
 export default function App() {
   const navigate = useNavigate()
   const location = useLocation()
-  const [token, setToken] = useState(localStorage.getItem(TOKEN_KEY) || '')
+  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || '')
+  const [refreshToken, setRefreshToken] = useState(() => localStorage.getItem(REFRESH_TOKEN_KEY) || '')
 
-  useEffect(() => {
-    const isMobile = window.matchMedia('(max-width: 768px)').matches
-    if (token && isMobile && location.pathname === '/') {
-      navigate('/quick-add', { replace: true })
+  const persistSession = useCallback((nextAccessToken, nextRefreshToken) => {
+    if (typeof nextAccessToken === 'string' && nextAccessToken) {
+      localStorage.setItem(TOKEN_KEY, nextAccessToken)
+      setToken(nextAccessToken)
     }
-  }, [token, location.pathname, navigate])
+    if (typeof nextRefreshToken === 'string') {
+      if (nextRefreshToken) {
+        localStorage.setItem(REFRESH_TOKEN_KEY, nextRefreshToken)
+        setRefreshToken(nextRefreshToken)
+      } else {
+        localStorage.removeItem(REFRESH_TOKEN_KEY)
+        setRefreshToken('')
+      }
+    }
+  }, [])
 
-  function handleLogin(accessToken) {
-    localStorage.setItem(TOKEN_KEY, accessToken)
-    setToken(accessToken)
+  const clearSession = useCallback(
+    (redirectToLogin = true) => {
+      localStorage.removeItem(TOKEN_KEY)
+      localStorage.removeItem(REFRESH_TOKEN_KEY)
+      setToken('')
+      setRefreshToken('')
+      if (redirectToLogin) {
+        navigate('/login', { replace: true })
+      }
+    },
+    [navigate]
+  )
+
+  useLayoutEffect(() => {
+    configureAuthHandlers({
+      getAccessToken: () => localStorage.getItem(TOKEN_KEY) || '',
+      getRefreshToken: () => localStorage.getItem(REFRESH_TOKEN_KEY) || '',
+      setTokens: ({ access, refresh }) => {
+        persistSession(access, refresh)
+      },
+      clearTokens: () => {
+        clearSession(true)
+      },
+    })
+
+    return () => {
+      configureAuthHandlers({})
+    }
+  }, [clearSession, persistSession])
+
+  function handleLogin(accessToken, nextRefreshToken) {
+    persistSession(accessToken, typeof nextRefreshToken === 'string' ? nextRefreshToken : '')
     navigate('/', { replace: true })
   }
 
-  function handleLogout() {
-    localStorage.removeItem(TOKEN_KEY)
-    setToken('')
-    navigate('/login', { replace: true })
+  async function handleLogout() {
+    const currentRefreshToken = refreshToken || localStorage.getItem(REFRESH_TOKEN_KEY) || ''
+    if (currentRefreshToken) {
+      try {
+        await logoutSession(currentRefreshToken)
+      } catch {
+        // Continue local sign-out even if backend token blacklist fails.
+      }
+    }
+    clearSession(true)
   }
 
-  if (!token && location.pathname !== '/login') {
+  if (!token && !refreshToken && location.pathname !== '/login') {
     return <Navigate to="/login" replace />
   }
 
@@ -2284,6 +3128,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<AuthPage onLoggedIn={handleLogin} />} />
       <Route path="/" element={<Dashboard token={token} onLogout={handleLogout} />} />
+      <Route path="/tasks" element={<Dashboard token={token} onLogout={handleLogout} />} />
       <Route path="/settings" element={<Dashboard token={token} onLogout={handleLogout} />} />
       <Route path="/quick-add" element={<QuickAddMobile token={token} />} />
     </Routes>

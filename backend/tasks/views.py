@@ -1,4 +1,5 @@
 from datetime import timedelta
+import secrets
 from uuid import uuid4
 
 from django.db import transaction
@@ -9,10 +10,16 @@ from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.parsers import FormParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from ai.semantic import dedupe_candidates, semantic_search_with_fallback
+from core.models import Organization
+from tasks.email_ingest import (
+    extract_recipient,
+    parse_eml,
+)
+from tasks.email_capture_service import EmailIngestError, ingest_raw_email_for_org
 from tasks.models import Project, Tag, Task
 from tasks.serializers import ProjectSerializer, TagSerializer, TaskSerializer
 from tasks.transitions import is_valid_transition
@@ -369,6 +376,87 @@ def bookmarklet_capture_view(request):
         source_link=source_link,
         source_snippet=source_snippet,
     )
+
+    serializer = TaskSerializer(task)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def inbound_email_capture_view(request):
+    provided_token = str(request.headers.get("X-TaskHub-Ingest-Token", "")).strip()
+    if not provided_token:
+        return Response(
+            {"error_code": "unauthorized", "message": "X-TaskHub-Ingest-Token is required", "details": {}},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    uploaded_eml = request.FILES.get("email") or request.FILES.get("file") or request.FILES.get("message")
+    if uploaded_eml is not None:
+        raw_eml = uploaded_eml.read()
+    else:
+        raw_eml_text = request.data.get("raw_email")
+        raw_eml = str(raw_eml_text).encode("utf-8") if raw_eml_text else b""
+
+    if not raw_eml:
+        return Response(
+            {"error_code": "validation_error", "message": "an .eml payload is required", "details": {}},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        parsed = parse_eml(raw_eml)
+    except Exception:
+        return Response(
+            {"error_code": "validation_error", "message": "invalid .eml payload", "details": {}},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    recipient = (
+        str(request.data.get("recipient") or request.data.get("to") or request.data.get("envelope_to") or "")
+        .strip()
+        .lower()
+    )
+    recipient = recipient or extract_recipient(parsed)
+    if not recipient:
+        return Response(
+            {
+                "error_code": "validation_error",
+                "message": "recipient email is required (recipient/to/envelope_to or email header)",
+                "details": {},
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    organization = Organization.objects.filter(inbound_email_address__iexact=recipient).first()
+    if organization is None:
+        return Response(
+            {"error_code": "not_found", "message": "recipient email is not configured", "details": {}},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    expected_token = organization.inbound_email_token or ""
+    if not expected_token or not secrets.compare_digest(provided_token, expected_token):
+        return Response(
+            {"error_code": "forbidden", "message": "invalid ingest token", "details": {}},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    sender = str(request.data.get("sender") or request.data.get("from") or "").strip().lower()
+    try:
+        task = ingest_raw_email_for_org(
+            organization,
+            raw_eml,
+            sender_override=sender,
+        )
+    except EmailIngestError as exc:
+        return Response(
+            {
+                "error_code": exc.error_code,
+                "message": exc.message,
+                "details": exc.details,
+            },
+            status=exc.status_code,
+        )
 
     serializer = TaskSerializer(task)
     return Response(serializer.data, status=status.HTTP_201_CREATED)

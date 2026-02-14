@@ -1,0 +1,11 @@
+From: sender@example.com
+To: tasks@example.com
+Subject: Subject fallback title
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+<task title>
+Project Z
+<work or personal>
+<priority>

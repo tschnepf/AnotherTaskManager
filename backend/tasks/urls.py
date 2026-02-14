@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from tasks.views import (
+    inbound_email_capture_view,
     ProjectViewSet,
     TagViewSet,
     TaskViewSet,
@@ -16,4 +17,5 @@ router.register(r"tags", TagViewSet, basename="tag")
 urlpatterns = [
     path("", include(router.urls)),
     path("capture/bookmarklet", bookmarklet_capture_view),
+    path("capture/email/inbound", inbound_email_capture_view),
 ]

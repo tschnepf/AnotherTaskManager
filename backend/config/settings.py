@@ -127,6 +127,9 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
 }
 
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", os.getenv("REDIS_URL", "redis://redis:6379/0"))
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+
 TASK_ARCHIVE_CADENCE = os.getenv("TASK_ARCHIVE_CADENCE", "weekly").strip().lower()
 
 CELERY_BEAT_SCHEDULE = {}
@@ -139,6 +142,19 @@ elif TASK_ARCHIVE_CADENCE == "monthly":
     CELERY_BEAT_SCHEDULE["archive-completed-tasks"] = {
         "task": "tasks.archive_completed",
         "schedule": crontab(minute=0, hour=2, day_of_month="1"),
+    }
+
+INBOUND_EMAIL_MODE = os.getenv("INBOUND_EMAIL_MODE", "imap").strip().lower()
+if INBOUND_EMAIL_MODE == "imap":
+    raw_interval = os.getenv("IMAP_POLL_INTERVAL_MINUTES", "2").strip()
+    try:
+        imap_poll_interval_minutes = int(raw_interval)
+    except ValueError:
+        imap_poll_interval_minutes = 2
+    imap_poll_interval_minutes = max(1, min(imap_poll_interval_minutes, 59))
+    CELERY_BEAT_SCHEDULE["sync-inbound-imap"] = {
+        "task": "tasks.sync_inbound_imap",
+        "schedule": crontab(minute=f"*/{imap_poll_interval_minutes}"),
     }
 
 # Allow same-origin iframe rendering so in-app media previews (PDF/image) can load.

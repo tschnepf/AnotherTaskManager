@@ -31,6 +31,12 @@ services:
       - taskhub_media:/app/backend/media
     env_file:
       - .env.example
+    environment:
+      INBOUND_EMAIL_MODE: ${INBOUND_EMAIL_MODE:-imap}
+      IMAP_POLL_INTERVAL_MINUTES: ${IMAP_POLL_INTERVAL_MINUTES:-2}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
     depends_on:
       db:
         condition: service_healthy
@@ -56,6 +62,12 @@ services:
       - taskhub_media:/app/backend/media
     env_file:
       - .env.example
+    environment:
+      INBOUND_EMAIL_MODE: ${INBOUND_EMAIL_MODE:-imap}
+      IMAP_POLL_INTERVAL_MINUTES: ${IMAP_POLL_INTERVAL_MINUTES:-2}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
     depends_on:
       db:
         condition: service_healthy
@@ -66,9 +78,17 @@ services:
     build:
       context: .
       dockerfile: infra/worker/Dockerfile
-    command: ["celery", "-A", "config", "beat", "-l", "info"]
+    command: ["sh", "-c", "cd backend && celery -A config beat -l info"]
+    volumes:
+      - taskhub_media:/app/backend/media
     env_file:
       - .env.example
+    environment:
+      INBOUND_EMAIL_MODE: ${INBOUND_EMAIL_MODE:-imap}
+      IMAP_POLL_INTERVAL_MINUTES: ${IMAP_POLL_INTERVAL_MINUTES:-2}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
     depends_on:
       db:
         condition: service_healthy

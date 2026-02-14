@@ -38,3 +38,40 @@ def archive_completed_tasks(organization_id: str | None = None):
         "archived_count": archived_count,
         "archive_after_days": archive_after_days,
     }
+
+
+@shared_task(name="tasks.sync_inbound_imap")
+def sync_inbound_imap_task(max_messages: int = 25):
+    from core.email_mode import INBOUND_EMAIL_MODE_IMAP, get_inbound_email_mode
+    from core.models import Organization
+    from tasks.email_imap_service import sync_inbound_imap
+
+    if get_inbound_email_mode() != INBOUND_EMAIL_MODE_IMAP:
+        return {"status": "skipped", "reason": "inbound email mode is not imap"}
+
+    processed_orgs = 0
+    total_processed = 0
+    total_created = 0
+    failed = []
+
+    organizations = Organization.objects.exclude(imap_username="").exclude(imap_password="")
+    for organization in organizations:
+        processed_orgs += 1
+        try:
+            result = sync_inbound_imap(organization, max_messages=max_messages)
+            total_processed += int(result.get("processed", 0))
+            total_created += int(result.get("created", 0))
+            for failure in result.get("failed", []):
+                failed.append({"organization_id": str(organization.id), **failure})
+        except ValueError as exc:
+            failed.append({"organization_id": str(organization.id), "message": str(exc)})
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"organization_id": str(organization.id), "message": str(exc)})
+
+    return {
+        "status": "ok",
+        "organizations": processed_orgs,
+        "processed": total_processed,
+        "created": total_created,
+        "failed": failed,
+    }
