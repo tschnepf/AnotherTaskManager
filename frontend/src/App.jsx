@@ -46,6 +46,7 @@ const PREVIEWABLE_IMAGE_EXTENSIONS = new Set([
   'svg',
   'avif',
 ])
+const PREVIEWABLE_HTML_EXTENSIONS = new Set(['html', 'htm'])
 const PREVIEWABLE_TEXT_EXTENSIONS = new Set([
   'eml',
   'txt',
@@ -416,6 +417,9 @@ function attachmentPreviewType(attachment) {
   if (PREVIEWABLE_IMAGE_EXTENSIONS.has(extension)) {
     return 'image'
   }
+  if (PREVIEWABLE_HTML_EXTENSIONS.has(extension)) {
+    return 'html'
+  }
   if (PREVIEWABLE_TEXT_EXTENSIONS.has(extension)) {
     return 'text'
   }
@@ -719,6 +723,19 @@ function TextAttachmentViewer({ url }) {
           ) : null}
         </>
       ) : null}
+    </div>
+  )
+}
+
+function HtmlAttachmentViewer({ url, title }) {
+  return (
+    <div className="html-viewer-shell">
+      <iframe
+        src={url}
+        title={title ? `Preview ${title}` : 'HTML attachment preview'}
+        className="html-viewer-frame"
+        sandbox="allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
+      />
     </div>
   )
 }
@@ -1625,6 +1642,7 @@ function Dashboard({ token, onLogout }) {
   const [tasks, setTasks] = useState([])
   const [taskTotal, setTaskTotal] = useState(0)
   const [projects, setProjects] = useState([])
+  const [sidebarProjects, setSidebarProjects] = useState([])
   const [activeView, setActiveView] = useState(() => initialTaskViewFromSettings(initialSettings))
   const [groupByPriority, setGroupByPriority] = useState(
     () => initialSettings.taskList.groupByPriorityDefault
@@ -1654,12 +1672,12 @@ function Dashboard({ token, onLogout }) {
   )
 
   const workProjects = useMemo(
-    () => projects.filter((project) => project.area === 'work'),
-    [projects]
+    () => sidebarProjects.filter((project) => project.area === 'work'),
+    [sidebarProjects]
   )
   const personalProjects = useMemo(
-    () => projects.filter((project) => project.area === 'personal'),
-    [projects]
+    () => sidebarProjects.filter((project) => project.area === 'personal'),
+    [sidebarProjects]
   )
   const filteredTasks = useMemo(() => tasks, [tasks])
   const activeViewLabel = useMemo(() => {
@@ -1696,10 +1714,10 @@ function Dashboard({ token, onLogout }) {
     if (activeView.type !== 'project') {
       return
     }
-    if (!projects.some((project) => project.id === activeView.projectId)) {
+    if (!sidebarProjects.some((project) => project.id === activeView.projectId)) {
       setActiveView({ type: 'all' })
     }
-  }, [activeView, projects])
+  }, [activeView, sidebarProjects])
 
   useEffect(() => {
     if (!openDeleteTaskId) {
@@ -1770,7 +1788,25 @@ function Dashboard({ token, onLogout }) {
     return () => {
       active = false
     }
-  }, [token])
+  }, [token, reloadCounter])
+
+  useEffect(() => {
+    let active = true
+    getProjects(token, { has_tasks: true })
+      .then((projectData) => {
+        if (!active) return
+        setSidebarProjects(Array.isArray(projectData) ? projectData : [])
+        setError('')
+      })
+      .catch((e) => {
+        if (!active) return
+        setError(e.message)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [token, reloadCounter])
 
   useEffect(() => {
     let active = true
@@ -2991,6 +3027,9 @@ function Dashboard({ token, onLogout }) {
               ) : null}
               {attachmentPreview.previewType === 'text' ? (
                 <TextAttachmentViewer url={attachmentPreview.url} />
+              ) : null}
+              {attachmentPreview.previewType === 'html' ? (
+                <HtmlAttachmentViewer url={attachmentPreview.url} title={attachmentPreview.name} />
               ) : null}
             </div>
           </div>

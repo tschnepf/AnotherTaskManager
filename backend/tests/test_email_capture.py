@@ -17,6 +17,7 @@ def _build_eml(
     from_address: str = "sender@example.com",
     html_body: str | None = None,
     attachments: list[tuple[str, bytes, str]] | None = None,
+    inline_images: list[tuple[str, bytes, str, str]] | None = None,
 ) -> bytes:
     message = EmailMessage()
     message["From"] = from_address
@@ -25,6 +26,18 @@ def _build_eml(
     message.set_content(body)
     if html_body is not None:
         message.add_alternative(html_body, subtype="html")
+        if inline_images:
+            html_part = message.get_payload()[-1]
+            for filename, payload, content_type, content_id in inline_images:
+                maintype, subtype = content_type.split("/", 1)
+                html_part.add_related(
+                    payload,
+                    maintype=maintype,
+                    subtype=subtype,
+                    filename=filename,
+                    cid=f"<{content_id}>",
+                    disposition="inline",
+                )
     for filename, payload, content_type in attachments or []:
         maintype, subtype = content_type.split("/", 1)
         message.add_attachment(payload, maintype=maintype, subtype=subtype, filename=filename)
@@ -122,7 +135,10 @@ def test_inbound_email_capture_creates_task_with_loose_project_match_and_clean_b
     assert str(response.data["created_by_user"]) == str(owner.id)
     assert response.data["notes"] == "Verify the lighting layout\nADCLBB\nwork\nhigh\n\nForwarded thread below."
     assert "Forwarded thread below." in response.data["source_snippet"]
-    assert response.data["attachments"] == []
+    assert len(response.data["attachments"]) == 2
+    attachment_names = {attachment["name"] for attachment in response.data["attachments"]}
+    assert "email-preview.html" in attachment_names
+    assert any(name.endswith(".eml") for name in attachment_names)
 
 
 @pytest.mark.django_db
@@ -203,10 +219,15 @@ def test_inbound_email_capture_strips_embedded_headers_and_saves_real_attachment
     assert response.status_code == 201
     assert response.data["notes"] == "Client update\nProject A\nwork\nhigh"
     assert "Original Message" not in response.data["notes"]
-    assert len(response.data["attachments"]) == 1
-    assert response.data["attachments"][0]["name"] == "scope.txt"
-    attachment_path = response.data["attachments"][0]["url"].replace("/media/", "", 1)
-    assert default_storage.exists(attachment_path)
+    assert len(response.data["attachments"]) == 3
+    attachment_names = {attachment["name"] for attachment in response.data["attachments"]}
+    assert "email-preview.html" in attachment_names
+    assert "scope.txt" in attachment_names
+    assert any(name.endswith(".eml") for name in attachment_names)
+
+    for attachment in response.data["attachments"]:
+        attachment_path = attachment["url"].replace("/media/", "", 1)
+        assert default_storage.exists(attachment_path)
 
 
 @pytest.mark.django_db
@@ -256,6 +277,57 @@ def test_inbound_email_capture_uses_html_body_when_plain_part_is_header_only():
     assert non_empty_lines[:4] == ["Site visit update", "Project Falcon", "work", "high"]
     assert "From: Sender Example" not in response.data["notes"]
     assert "Crane access approved." in response.data["notes"]
+
+
+@pytest.mark.django_db
+def test_inbound_email_capture_saves_rendered_email_preview_with_inline_images_and_links():
+    org = Organization.objects.create(
+        name="Email Org",
+        inbound_email_address="tasks@example.com",
+        inbound_email_token="token-123",
+    )
+    User.objects.create_user(
+        email="owner@example.com",
+        password="StrongPass123!",
+        role=User.Role.OWNER,
+        organization=org,
+    )
+    client = APIClient()
+    raw_eml = _build_eml(
+        subject="Inline photo update",
+        body="Please see inline image",
+        html_body=(
+            "<p>Please review this update.</p>"
+            '<p><a href="https://example.com/spec-review">Spec review link</a></p>'
+            '<img src="cid:photo-1" alt="Inline photo" />'
+        ),
+        to_address="tasks@example.com",
+        inline_images=[("photo.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR", "image/png", "photo-1")],
+    )
+    uploaded = SimpleUploadedFile("forwarded.eml", raw_eml, content_type="message/rfc822")
+
+    response = client.post(
+        "/capture/email/inbound",
+        {"recipient": "tasks@example.com", "email": uploaded},
+        format="multipart",
+        HTTP_X_TASKHUB_INGEST_TOKEN="token-123",
+    )
+
+    assert response.status_code == 201
+    attachments = response.data["attachments"]
+    attachment_names = {attachment["name"] for attachment in attachments}
+    assert "email-preview.html" in attachment_names
+    assert "photo.png" in attachment_names
+    assert any(name.endswith(".eml") for name in attachment_names)
+
+    preview_attachment = next(attachment for attachment in attachments if attachment["name"] == "email-preview.html")
+    inline_image_attachment = next(attachment for attachment in attachments if attachment["name"] == "photo.png")
+    preview_path = preview_attachment["url"].replace("/media/", "", 1)
+    with default_storage.open(preview_path, mode="rb") as preview_file:
+        preview_html = preview_file.read().decode("utf-8")
+
+    assert "https://example.com/spec-review" in preview_html
+    assert inline_image_attachment["url"] in preview_html
 
 
 @pytest.mark.django_db
@@ -336,6 +408,47 @@ def test_inbound_email_capture_supports_force_task_subject_and_force_project():
     assert response.status_code == 201
     assert response.data["title"] == "Subject to force"
     assert response.data["notes"] == "Work\nHigh\nBody context line"
+    assert response.data["area"] == Task.Area.WORK
+    assert response.data["priority"] == 5
+    assert response.data["project"] is not None
+
+
+@pytest.mark.django_db
+def test_inbound_email_capture_supports_priority_before_area_with_force_directives():
+    org = Organization.objects.create(
+        name="Email Org",
+        inbound_email_address="tasks@example.com",
+        inbound_email_token="token-123",
+    )
+    User.objects.create_user(
+        email="owner@example.com",
+        password="StrongPass123!",
+        role=User.Role.OWNER,
+        organization=org,
+    )
+
+    client = APIClient()
+    raw_eml = _build_eml(
+        subject="Fw: CMH - G&W Programming Spec Review",
+        body=(
+            "Task: Subject\n"
+            "Project: ADC CMH02\n"
+            "High\n"
+            "Work\n"
+        ),
+        to_address="tasks@example.com",
+    )
+    uploaded = SimpleUploadedFile("forwarded.eml", raw_eml, content_type="message/rfc822")
+
+    response = client.post(
+        "/capture/email/inbound",
+        {"recipient": "tasks@example.com", "email": uploaded},
+        format="multipart",
+        HTTP_X_TASKHUB_INGEST_TOKEN="token-123",
+    )
+
+    assert response.status_code == 201
+    assert response.data["title"] == "Fw: CMH - G&W Programming Spec Review"
     assert response.data["area"] == Task.Area.WORK
     assert response.data["priority"] == 5
     assert response.data["project"] is not None

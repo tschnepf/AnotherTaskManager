@@ -1,4 +1,5 @@
 import re
+import mimetypes
 from html import unescape
 from email import policy
 from email.message import Message
@@ -18,6 +19,8 @@ FORWARDED_MARKER_RE = re.compile(
 )
 ON_WROTE_RE = re.compile(r"^\s*on .+ wrote:\s*$", re.IGNORECASE)
 FORCE_DIRECTIVE_RE = re.compile(r"^\s*(task|project)\s*:\s*(.*?)\s*$", re.IGNORECASE)
+AREA_DIRECTIVE_RE = re.compile(r"^\s*area\s*:\s*(.*?)\s*$", re.IGNORECASE)
+PRIORITY_DIRECTIVE_RE = re.compile(r"^\s*priority\s*:\s*(.*?)\s*$", re.IGNORECASE)
 HTML_BREAK_TAG_RE = re.compile(r"(?i)</?(?:br|p|div|li|tr|h[1-6]|blockquote)[^>]*>")
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 HTML_WHITESPACE_RE = re.compile(r"[ \t\f\v]+")
@@ -68,6 +71,35 @@ def extract_text_body(message: Message) -> str:
     return ""
 
 
+def extract_html_body(message: Message) -> str:
+    html_candidates = []
+    parts = message.walk() if message.is_multipart() else [message]
+
+    for part in parts:
+        if part.is_multipart():
+            continue
+        content_disposition = (part.get_content_disposition() or "").lower()
+        filename = str(part.get_filename() or "").strip()
+        if content_disposition == "attachment" or filename:
+            continue
+
+        content_type = (part.get_content_type() or "").lower()
+        if content_type != "text/html":
+            continue
+
+        raw_html = _message_part_text(part)
+        if raw_html.strip():
+            html_candidates.append(raw_html)
+
+    best_html = _best_body_candidate(html_candidates)
+    if best_html:
+        return best_html
+
+    if (message.get_content_type() or "").lower() == "text/html":
+        return _message_part_text(message)
+    return ""
+
+
 def clean_email_body_text(body_text: str) -> str:
     normalized = str(body_text or "").replace("\r\n", "\n").replace("\r", "\n")
     lines = normalized.split("\n")
@@ -113,26 +145,38 @@ def clean_email_body_text(body_text: str) -> str:
 
 def extract_email_attachments(message: Message) -> list[dict]:
     attachments = []
+    attachment_index = 0
     for part in message.walk():
         if part.is_multipart():
             continue
 
+        content_type = str(part.get_content_type() or "application/octet-stream").strip().lower()
         content_disposition = (part.get_content_disposition() or "").lower()
         filename = str(part.get_filename() or "").strip()
+        content_id = _normalized_content_id(part.get("Content-ID", ""))
         is_attachment = content_disposition == "attachment" or bool(filename)
-        if not is_attachment:
+        is_inline_asset = bool(content_id) and content_type not in {"text/plain", "text/html"}
+        if content_disposition == "inline" and content_type not in {"text/plain", "text/html"}:
+            is_inline_asset = True
+        if not is_attachment and not is_inline_asset:
             continue
+
+        attachment_index += 1
+        attachment_name = filename or _default_attachment_name(content_id, content_type, attachment_index)
+        if not attachment_name:
+            attachment_name = f"attachment-{attachment_index}"
 
         payload = part.get_payload(decode=True)
         if payload in (None, b""):
-            continue
+            payload = _message_part_text(part).encode("utf-8")
 
-        content_type = str(part.get_content_type() or "application/octet-stream").strip().lower()
         attachments.append(
             {
-                "name": filename or "attachment",
+                "name": attachment_name,
                 "content": bytes(payload),
                 "content_type": content_type,
+                "content_id": content_id,
+                "disposition": content_disposition or "attachment",
             }
         )
     return attachments
@@ -164,12 +208,39 @@ def parse_task_metadata(body_text: str, subject: str) -> tuple[str, str, str, in
 
     title = _value_or_empty(lines, 0, {"task title", "title"})
     project_hint = _value_or_empty(lines, 1, {"project name", "project"})
-    area_hint = _value_or_empty(lines, 2, {"work or personal", "area"})
-    priority_hint = _value_or_empty(lines, 3, {"priority"})
+    area = None
+    priority = None
+
+    # Prefer explicit labels, e.g. "Area: work" and "Priority: high".
+    for line in lines:
+        area_match = AREA_DIRECTIVE_RE.match(line)
+        if area_match:
+            parsed = _try_parse_area(area_match.group(1))
+            if parsed is not None:
+                area = parsed
+        priority_match = PRIORITY_DIRECTIVE_RE.match(line)
+        if priority_match:
+            parsed = _try_parse_priority(priority_match.group(1))
+            if parsed is not None:
+                priority = parsed
+
+    # Fallback: infer area/priority from first metadata lines regardless of order.
+    if area is None or priority is None:
+        for line in lines[2:]:
+            if area is None:
+                parsed_area = _try_parse_area(line)
+                if parsed_area is not None:
+                    area = parsed_area
+            if priority is None:
+                parsed_priority = _try_parse_priority(line)
+                if parsed_priority is not None:
+                    priority = parsed_priority
+            if area is not None and priority is not None:
+                break
 
     title = title or subject or "Email task"
-    area = _parse_area(area_hint)
-    priority = _parse_priority(priority_hint)
+    area = area if area is not None else Task.Area.WORK
+    priority = priority if priority is not None else LOW_PRIORITY
     return title, project_hint, area, priority
 
 
@@ -313,3 +384,52 @@ def _parse_priority(value: str) -> int:
         "urgent": 5,
     }
     return by_label.get(normalized, LOW_PRIORITY)
+
+
+def _try_parse_area(value: str):
+    normalized = str(value or "").strip().lower()
+    if normalized == Task.Area.WORK:
+        return Task.Area.WORK
+    if normalized == Task.Area.PERSONAL:
+        return Task.Area.PERSONAL
+    return None
+
+
+def _try_parse_priority(value: str):
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized.isdigit():
+        numeric = int(normalized)
+        if 1 <= numeric <= 5:
+            return numeric
+        return None
+    by_label = {
+        "low": 1,
+        "medium": 3,
+        "med": 3,
+        "normal": 3,
+        "high": 5,
+        "urgent": 5,
+    }
+    return by_label.get(normalized)
+
+
+def _normalized_content_id(raw_value: str) -> str:
+    value = str(raw_value or "").strip()
+    if value.startswith("<") and value.endswith(">") and len(value) > 2:
+        value = value[1:-1].strip()
+    return value.lower()
+
+
+def _default_attachment_name(content_id: str, content_type: str, index: int) -> str:
+    extension = mimetypes.guess_extension(content_type or "") or ""
+    extension = extension if extension.startswith(".") else ""
+    if content_id:
+        base = re.sub(r"[^a-zA-Z0-9._-]+", "-", content_id).strip("-")
+        if not base:
+            base = f"inline-{index}"
+        if extension and not base.lower().endswith(extension.lower()):
+            return f"{base}{extension}"
+        return base
+    return f"attachment-{index}{extension}"

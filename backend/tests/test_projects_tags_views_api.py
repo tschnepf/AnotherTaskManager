@@ -3,7 +3,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import Organization, User
-from tasks.models import Project
+from tasks.models import Project, Task
 
 
 @pytest.mark.django_db
@@ -71,3 +71,27 @@ def test_projects_list_supports_area_q_limit_filters():
     assert work_only.status_code == 200
     returned_names = {item["name"] for item in work_only.data}
     assert returned_names == {"Alpha Work", "Beta Work"}
+
+
+@pytest.mark.django_db
+def test_projects_list_can_filter_to_only_projects_with_tasks():
+    org = Organization.objects.create(name="Org Has Tasks")
+    user = User.objects.create_user(email="has-tasks@example.com", password="StrongPass123!", organization=org)
+
+    project_with_task = Project.objects.create(organization=org, name="Has Task", area="work")
+    Project.objects.create(organization=org, name="No Task", area="work")
+    Task.objects.create(
+        organization=org,
+        created_by_user=user,
+        title="Linked task",
+        area=Task.Area.WORK,
+        project=project_with_task,
+    )
+
+    client = APIClient()
+    token = RefreshToken.for_user(user)
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    filtered = client.get("/projects/?has_tasks=true")
+    assert filtered.status_code == 200
+    assert [item["name"] for item in filtered.data] == ["Has Task"]

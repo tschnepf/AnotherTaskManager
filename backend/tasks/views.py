@@ -314,11 +314,14 @@ class ProjectViewSet(OrgScopedQuerysetMixin, viewsets.ModelViewSet):
         area = self.request.query_params.get("area")
         q = (self.request.query_params.get("q") or "").strip()
         limit_value = self.request.query_params.get("limit")
+        has_tasks_value = (self.request.query_params.get("has_tasks") or "").strip().lower()
 
         if area:
             queryset = queryset.filter(area=area)
         if q:
             queryset = queryset.filter(name__icontains=q)
+        if has_tasks_value in {"1", "true", "yes", "on"}:
+            queryset = queryset.filter(tasks__isnull=False).distinct()
 
         queryset = queryset.order_by("name")
         if limit_value:
