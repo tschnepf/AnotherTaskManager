@@ -133,7 +133,7 @@ def test_inbound_email_capture_creates_task_with_loose_project_match_and_clean_b
     assert str(response.data["project"]) == str(project.id)
     assert response.data["source_type"] == Task.SourceType.EMAIL
     assert str(response.data["created_by_user"]) == str(owner.id)
-    assert response.data["notes"] == "Verify the lighting layout\nADCLBB\nwork\nhigh\n\nForwarded thread below."
+    assert response.data["notes"] == ""
     assert "Forwarded thread below." in response.data["source_snippet"]
     assert len(response.data["attachments"]) == 2
     attachment_names = {attachment["name"] for attachment in response.data["attachments"]}
@@ -217,8 +217,9 @@ def test_inbound_email_capture_strips_embedded_headers_and_saves_real_attachment
     )
 
     assert response.status_code == 201
-    assert response.data["notes"] == "Client update\nProject A\nwork\nhigh"
-    assert "Original Message" not in response.data["notes"]
+    assert response.data["notes"] == ""
+    assert response.data["source_snippet"] == "Client update\nProject A\nwork\nhigh"
+    assert "Original Message" not in response.data["source_snippet"]
     assert len(response.data["attachments"]) == 3
     attachment_names = {attachment["name"] for attachment in response.data["attachments"]}
     assert "email-preview.html" in attachment_names
@@ -273,10 +274,11 @@ def test_inbound_email_capture_uses_html_body_when_plain_part_is_header_only():
 
     assert response.status_code == 201
     assert response.data["title"] == "Site visit update"
-    non_empty_lines = [line.strip() for line in response.data["notes"].splitlines() if line.strip()]
+    assert response.data["notes"] == ""
+    non_empty_lines = [line.strip() for line in response.data["source_snippet"].splitlines() if line.strip()]
     assert non_empty_lines[:4] == ["Site visit update", "Project Falcon", "work", "high"]
-    assert "From: Sender Example" not in response.data["notes"]
-    assert "Crane access approved." in response.data["notes"]
+    assert "From: Sender Example" not in response.data["source_snippet"]
+    assert "Crane access approved." in response.data["source_snippet"]
 
 
 @pytest.mark.django_db
@@ -366,7 +368,7 @@ def test_inbound_email_capture_supports_force_project_and_creates_when_missing()
     project = Project.objects.get(organization=org, name="ADC LBB")
     assert str(response.data["project"]) == str(project.id)
     assert response.data["title"] == "Please review latest reflected ceiling plans."
-    assert response.data["notes"] == "Please review latest reflected ceiling plans."
+    assert response.data["notes"] == ""
 
 
 @pytest.mark.django_db
@@ -407,7 +409,8 @@ def test_inbound_email_capture_supports_force_task_subject_and_force_project():
 
     assert response.status_code == 201
     assert response.data["title"] == "Subject to force"
-    assert response.data["notes"] == "Work\nHigh\nBody context line"
+    assert response.data["notes"] == ""
+    assert response.data["source_snippet"] == "Work\nHigh\nBody context line"
     assert response.data["area"] == Task.Area.WORK
     assert response.data["priority"] == 5
     assert response.data["project"] is not None

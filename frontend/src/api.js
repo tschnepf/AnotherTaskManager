@@ -97,7 +97,10 @@ async function refreshAccessToken() {
   }
 }
 
-async function send(path, { method = 'GET', token, body, retryOnAuthFailure = true } = {}) {
+async function send(
+  path,
+  { method = 'GET', token, body, retryOnAuthFailure = true, signal } = {}
+) {
   const isFormData = typeof FormData !== 'undefined' && body instanceof FormData
   const headers = {}
   if (!isFormData && body !== undefined) {
@@ -112,6 +115,7 @@ async function send(path, { method = 'GET', token, body, retryOnAuthFailure = tr
   const response = await fetch(`${API_BASE}${path}`, {
     method,
     headers,
+    signal,
     body: body
       ? isFormData || typeof body === 'string'
         ? body
@@ -122,15 +126,21 @@ async function send(path, { method = 'GET', token, body, retryOnAuthFailure = tr
   if (response.status === 401 && retryOnAuthFailure && (accessToken || readRefreshToken())) {
     const refreshedAccess = await refreshAccessToken()
     if (refreshedAccess) {
-      return send(path, { method, token: refreshedAccess, body, retryOnAuthFailure: false })
+      return send(path, {
+        method,
+        token: refreshedAccess,
+        body,
+        signal,
+        retryOnAuthFailure: false,
+      })
     }
   }
 
   return response
 }
 
-async function request(path, { method = 'GET', token, body } = {}) {
-  const response = await send(path, { method, token, body })
+async function request(path, { method = 'GET', token, body, signal } = {}) {
+  const response = await send(path, { method, token, body, signal })
   const data = await parseJsonBody(response)
 
   if (!response.ok) {
@@ -235,6 +245,21 @@ export async function reorderTask(token, taskId, targetTaskId, placement) {
     token,
     body: { target_task_id: targetTaskId, placement },
   })
+}
+
+export async function waitForTaskChanges(
+  token,
+  { cursor = '', timeoutSeconds = 20, pollIntervalMs = 1000, signal } = {}
+) {
+  const query = new URLSearchParams({
+    timeout_seconds: String(timeoutSeconds),
+    poll_interval_ms: String(pollIntervalMs),
+  })
+  if (cursor) {
+    query.set('cursor', cursor)
+  }
+
+  return request(`/tasks/changes/?${query.toString()}`, { token, signal })
 }
 
 export async function uploadTaskAttachment(token, taskId, file) {

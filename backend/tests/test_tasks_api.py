@@ -153,6 +153,87 @@ def test_tasks_reorder_is_persisted_on_backend():
 
 
 @pytest.mark.django_db
+def test_tasks_changes_cursor_detects_create_update_and_delete():
+    org = Organization.objects.create(name="Org Live")
+    user = User.objects.create_user(email="live@example.com", password="StrongPass123!", organization=org)
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    baseline = client.get("/tasks/changes/")
+    assert baseline.status_code == 200
+    assert baseline.data["changed"] is False
+    baseline_cursor = baseline.data["cursor"]
+
+    create_res = client.post("/tasks/", {"title": "Live create", "area": "work"}, format="json")
+    assert create_res.status_code == 201
+    task_id = create_res.data["id"]
+
+    after_create = client.get("/tasks/changes/", {"cursor": baseline_cursor, "timeout_seconds": 0})
+    assert after_create.status_code == 200
+    assert after_create.data["changed"] is True
+    create_cursor = after_create.data["cursor"]
+    assert create_cursor != baseline_cursor
+
+    patch_res = client.patch(f"/tasks/{task_id}/", {"priority": 3}, format="json")
+    assert patch_res.status_code == 200
+
+    after_patch = client.get("/tasks/changes/", {"cursor": create_cursor, "timeout_seconds": 0})
+    assert after_patch.status_code == 200
+    assert after_patch.data["changed"] is True
+    patch_cursor = after_patch.data["cursor"]
+    assert patch_cursor != create_cursor
+
+    delete_res = client.delete(f"/tasks/{task_id}/")
+    assert delete_res.status_code == 204
+
+    after_delete = client.get("/tasks/changes/", {"cursor": patch_cursor, "timeout_seconds": 0})
+    assert after_delete.status_code == 200
+    assert after_delete.data["changed"] is True
+    delete_cursor = after_delete.data["cursor"]
+    assert delete_cursor != patch_cursor
+
+    no_change = client.get("/tasks/changes/", {"cursor": delete_cursor, "timeout_seconds": 0})
+    assert no_change.status_code == 200
+    assert no_change.data["changed"] is False
+    assert no_change.data["cursor"] == delete_cursor
+
+
+@pytest.mark.django_db
+def test_tasks_changes_cursor_detects_reorder_updates():
+    org = Organization.objects.create(name="Org Live Reorder")
+    user = User.objects.create_user(
+        email="live-reorder@example.com", password="StrongPass123!", organization=org
+    )
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    first = client.post("/tasks/", {"title": "First", "area": "work"}, format="json")
+    second = client.post("/tasks/", {"title": "Second", "area": "work"}, format="json")
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    cursor_before_reorder = client.get("/tasks/changes/").data["cursor"]
+
+    reorder = client.post(
+        f"/tasks/{second.data['id']}/reorder/",
+        {"target_task_id": first.data["id"], "placement": "before"},
+        format="json",
+    )
+    assert reorder.status_code == 200
+
+    after_reorder = client.get(
+        "/tasks/changes/",
+        {"cursor": cursor_before_reorder, "timeout_seconds": 0},
+    )
+    assert after_reorder.status_code == 200
+    assert after_reorder.data["changed"] is True
+
+
+@pytest.mark.django_db
 def test_task_priority_is_optional_and_updatable():
     org = Organization.objects.create(name="Priority Org")
     user = User.objects.create_user(email="priority@example.com", password="StrongPass123!", organization=org)

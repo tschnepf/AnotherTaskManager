@@ -24,12 +24,16 @@ import {
   uploadTaskAttachment,
   updateEmailCaptureSettings,
   updateTask,
+  waitForTaskChanges,
 } from './api'
 import './App.css'
 
 const TOKEN_KEY = 'taskhub_access_token'
 const REFRESH_TOKEN_KEY = 'taskhub_refresh_token'
 const DAY_IN_MS = 24 * 60 * 60 * 1000
+const LIVE_SYNC_TIMEOUT_SECONDS = 20
+const LIVE_SYNC_POLL_INTERVAL_MS = 1000
+const LIVE_SYNC_RETRY_DELAY_MS = 1500
 const PRIORITY_OPTIONS = [
   { value: '', label: '-' },
   { value: 'high', label: 'High' },
@@ -1891,6 +1895,56 @@ function Dashboard({ token, onLogout }) {
     }
   }, [token, taskQueryParams, reloadCounter, isSettingsView])
 
+  useEffect(() => {
+    let active = true
+    let cursor = ''
+    let currentController = null
+    let retryTimer = null
+
+    async function runLiveSyncLoop() {
+      while (active) {
+        currentController = new AbortController()
+        try {
+          const response = await waitForTaskChanges(token, {
+            cursor,
+            timeoutSeconds: LIVE_SYNC_TIMEOUT_SECONDS,
+            pollIntervalMs: LIVE_SYNC_POLL_INTERVAL_MS,
+            signal: currentController.signal,
+          })
+          if (!active) {
+            return
+          }
+          if (typeof response?.cursor === 'string' && response.cursor) {
+            cursor = response.cursor
+          }
+          if (response?.changed) {
+            setReloadCounter((value) => value + 1)
+          }
+        } catch (e) {
+          if (!active || e?.name === 'AbortError') {
+            return
+          }
+          await new Promise((resolve) => {
+            retryTimer = window.setTimeout(resolve, LIVE_SYNC_RETRY_DELAY_MS)
+          })
+        } finally {
+          currentController = null
+        }
+      }
+    }
+
+    runLiveSyncLoop()
+    return () => {
+      active = false
+      if (currentController) {
+        currentController.abort()
+      }
+      if (retryTimer) {
+        window.clearTimeout(retryTimer)
+      }
+    }
+  }, [token])
+
   function handleTaskCreated() {
     setReloadCounter((value) => value + 1)
     setIsMobileQuickAddOpen(false)
@@ -2642,6 +2696,9 @@ function Dashboard({ token, onLogout }) {
             <CogIcon />
             <span>Settings</span>
           </button>
+          <button type="button" className="sidebar-logout-button" onClick={onLogout}>
+            Log Out
+          </button>
         </div>
       </aside>
       {isSidebarOpen ? (
@@ -2705,9 +2762,6 @@ function Dashboard({ token, onLogout }) {
               +
             </button>
           ) : null}
-          <button className="topbar-logout" onClick={onLogout}>
-            Log Out
-          </button>
         </header>
 
         {!isSettingsView && isMobileQuickAddOpen ? (

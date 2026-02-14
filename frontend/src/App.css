@@ -273,6 +273,20 @@ button {
   height: 16px;
 }
 
+.sidebar-logout-button {
+  margin-top: 8px;
+  width: 100%;
+  border-color: #5c2328;
+  background: #2a171a;
+  color: #ffccd2;
+}
+
+.sidebar-logout-button:hover {
+  border-color: #7a2d34;
+  background: #3b1c20;
+  color: #ffe2e6;
+}
+
 .view-button-sub {
   font-size: 13px;
   color: #8e9cab;
@@ -1189,10 +1203,6 @@ td {
   margin: 0;
 }
 
-.topbar-logout {
-  margin-left: auto;
-}
-
 .mobile-quick-add-sheet-backdrop {
   position: fixed;
   inset: 0;
@@ -1381,12 +1391,6 @@ td {
     padding: 10px 12px;
     align-items: center;
     gap: 8px;
-  }
-
-  .topbar-logout {
-    margin-left: 0;
-    font-size: 12px;
-    padding: 7px 10px;
   }
 
   .content {

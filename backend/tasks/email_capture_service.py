@@ -135,7 +135,6 @@ def ingest_raw_email_for_org(
         organization=organization,
         created_by_user=creator,
         title=title,
-        notes=metadata_body_text,
         area=area,
         priority=priority,
         project=project_match,

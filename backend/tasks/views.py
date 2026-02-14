@@ -1,11 +1,12 @@
 from datetime import timedelta
 import secrets
+import time
 from uuid import uuid4
 
 from django.db import transaction
 from django.core.files.storage import default_storage
 from django.utils.text import get_valid_filename
-from django.db.models import Case, IntegerField, Max, Q, Value, When
+from django.db.models import Case, Count, IntegerField, Max, Q, Value, When
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
@@ -33,6 +34,14 @@ class OrgScopedQuerysetMixin:
 class TaskViewSet(OrgScopedQuerysetMixin, viewsets.ModelViewSet):
     serializer_class = TaskSerializer
     permission_classes = [IsAuthenticated]
+
+    def _change_cursor(self):
+        aggregated = Task.objects.filter(organization=self.request.user.organization).aggregate(
+            total=Count("id"), latest_updated=Max("updated_at")
+        )
+        latest_updated = aggregated["latest_updated"]
+        latest_epoch = f"{latest_updated.timestamp():.6f}" if latest_updated else "0"
+        return f'{aggregated["total"]}:{latest_epoch}'
 
     def get_queryset(self):
         user = self.request.user
@@ -243,11 +252,52 @@ class TaskViewSet(OrgScopedQuerysetMixin, viewsets.ModelViewSet):
             insert_index = target_index if placement == "before" else target_index + 1
             ordered_ids.insert(insert_index, task.id)
 
-            updates = [Task(id=task_id, position=index) for index, task_id in enumerate(ordered_ids, start=1)]
-            Task.objects.bulk_update(updates, ["position"])
+            updated_at = timezone.now()
+            updates = [
+                Task(id=task_id, position=index, updated_at=updated_at)
+                for index, task_id in enumerate(ordered_ids, start=1)
+            ]
+            Task.objects.bulk_update(updates, ["position", "updated_at"])
 
         task.refresh_from_db()
         return Response(self.get_serializer(task).data)
+
+    @action(detail=False, methods=["get"], url_path="changes")
+    def changes(self, request):
+        cursor = str(request.query_params.get("cursor") or "").strip()
+
+        try:
+            timeout_seconds = int(request.query_params.get("timeout_seconds", 20))
+        except (TypeError, ValueError):
+            timeout_seconds = 20
+        timeout_seconds = max(0, min(timeout_seconds, 30))
+
+        try:
+            poll_interval_ms = int(request.query_params.get("poll_interval_ms", 1000))
+        except (TypeError, ValueError):
+            poll_interval_ms = 1000
+        poll_interval_ms = max(200, min(poll_interval_ms, 5000))
+
+        current_cursor = self._change_cursor()
+        if not cursor:
+            return Response({"changed": False, "cursor": current_cursor})
+        if cursor != current_cursor:
+            return Response({"changed": True, "cursor": current_cursor})
+        if timeout_seconds == 0:
+            return Response({"changed": False, "cursor": current_cursor})
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            sleep_seconds = min(poll_interval_ms / 1000, remaining)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+
+            current_cursor = self._change_cursor()
+            if cursor != current_cursor:
+                return Response({"changed": True, "cursor": current_cursor})
+
+        return Response({"changed": False, "cursor": current_cursor})
 
     @action(
         detail=True,
