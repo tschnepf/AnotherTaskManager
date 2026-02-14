@@ -5,11 +5,13 @@ import { PDFWorker, getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import {
   createProject,
   deleteTask,
+  downloadDatabaseBackup,
   getProjects,
   getTasks,
   login,
   quickAddTask,
   reorderTask,
+  restoreDatabaseBackup,
   setTaskCompleted,
   uploadTaskAttachment,
   updateTask,
@@ -34,6 +36,140 @@ const PREVIEWABLE_IMAGE_EXTENSIONS = new Set([
   'svg',
   'avif',
 ])
+const APP_SETTINGS_STORAGE_KEY = 'taskhub_app_settings_v1'
+const DEFAULT_APP_SETTINGS = Object.freeze({
+  profile: {
+    displayName: '',
+    replyToEmail: '',
+    timezone: 'UTC',
+  },
+  smtp: {
+    enabled: false,
+    host: '',
+    port: '587',
+    security: 'starttls',
+    username: '',
+    password: '',
+    fromName: '',
+    fromEmail: '',
+  },
+  ai: {
+    mode: 'off',
+    allowCloudAi: false,
+    redactSensitivePatterns: true,
+    localBaseUrl: 'http://local-ai:8000',
+  },
+  taskList: {
+    defaultArea: 'all',
+    groupByPriorityDefault: false,
+  },
+})
+
+function cloneDefaultAppSettings() {
+  return {
+    profile: { ...DEFAULT_APP_SETTINGS.profile },
+    smtp: { ...DEFAULT_APP_SETTINGS.smtp },
+    ai: { ...DEFAULT_APP_SETTINGS.ai },
+    taskList: { ...DEFAULT_APP_SETTINGS.taskList },
+  }
+}
+
+function loadAppSettings() {
+  const defaults = cloneDefaultAppSettings()
+  if (typeof window === 'undefined') {
+    return defaults
+  }
+
+  try {
+    const raw = window.localStorage.getItem(APP_SETTINGS_STORAGE_KEY)
+    if (!raw) {
+      return defaults
+    }
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') {
+      return defaults
+    }
+
+    return {
+      profile: {
+        displayName:
+          typeof parsed.profile?.displayName === 'string'
+            ? parsed.profile.displayName
+            : defaults.profile.displayName,
+        replyToEmail:
+          typeof parsed.profile?.replyToEmail === 'string'
+            ? parsed.profile.replyToEmail
+            : defaults.profile.replyToEmail,
+        timezone:
+          typeof parsed.profile?.timezone === 'string'
+            ? parsed.profile.timezone
+            : defaults.profile.timezone,
+      },
+      smtp: {
+        enabled:
+          typeof parsed.smtp?.enabled === 'boolean' ? parsed.smtp.enabled : defaults.smtp.enabled,
+        host: typeof parsed.smtp?.host === 'string' ? parsed.smtp.host : defaults.smtp.host,
+        port: typeof parsed.smtp?.port === 'string' ? parsed.smtp.port : defaults.smtp.port,
+        security:
+          typeof parsed.smtp?.security === 'string' ? parsed.smtp.security : defaults.smtp.security,
+        username:
+          typeof parsed.smtp?.username === 'string' ? parsed.smtp.username : defaults.smtp.username,
+        password:
+          typeof parsed.smtp?.password === 'string' ? parsed.smtp.password : defaults.smtp.password,
+        fromName:
+          typeof parsed.smtp?.fromName === 'string' ? parsed.smtp.fromName : defaults.smtp.fromName,
+        fromEmail:
+          typeof parsed.smtp?.fromEmail === 'string'
+            ? parsed.smtp.fromEmail
+            : defaults.smtp.fromEmail,
+      },
+      ai: {
+        mode: typeof parsed.ai?.mode === 'string' ? parsed.ai.mode : defaults.ai.mode,
+        allowCloudAi:
+          typeof parsed.ai?.allowCloudAi === 'boolean'
+            ? parsed.ai.allowCloudAi
+            : defaults.ai.allowCloudAi,
+        redactSensitivePatterns:
+          typeof parsed.ai?.redactSensitivePatterns === 'boolean'
+            ? parsed.ai.redactSensitivePatterns
+            : defaults.ai.redactSensitivePatterns,
+        localBaseUrl:
+          typeof parsed.ai?.localBaseUrl === 'string'
+            ? parsed.ai.localBaseUrl
+            : defaults.ai.localBaseUrl,
+      },
+      taskList: {
+        defaultArea:
+          typeof parsed.taskList?.defaultArea === 'string'
+            ? parsed.taskList.defaultArea
+            : defaults.taskList.defaultArea,
+        groupByPriorityDefault:
+          typeof parsed.taskList?.groupByPriorityDefault === 'boolean'
+            ? parsed.taskList.groupByPriorityDefault
+            : defaults.taskList.groupByPriorityDefault,
+      },
+    }
+  } catch {
+    return defaults
+  }
+}
+
+function saveAppSettings(settings) {
+  if (typeof window === 'undefined') {
+    return
+  }
+  window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(settings))
+}
+
+function initialTaskViewFromSettings(settings) {
+  if (settings.taskList.defaultArea === 'work') {
+    return { type: 'area', area: 'work' }
+  }
+  if (settings.taskList.defaultArea === 'personal') {
+    return { type: 'area', area: 'personal' }
+  }
+  return { type: 'all' }
+}
 
 function priorityValueFromLevel(level) {
   if (level === 'high') return 5
@@ -56,6 +192,12 @@ function priorityClassFromLevel(level) {
   if (level === 'medium') return 'priority-text-medium'
   if (level === 'low') return 'priority-text-low'
   return ''
+}
+
+function formatAreaLabel(area) {
+  if (area === 'work') return 'Work'
+  if (area === 'personal') return 'Personal'
+  return area
 }
 
 function normalizeAttachments(attachments) {
@@ -174,6 +316,31 @@ function DownloadIcon() {
       />
       <path
         d="M5 17.5H19V20.5H5V17.5Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function CogIcon() {
+  return (
+    <svg
+      className="sidebar-settings-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <path
+        d="M12 8.2A3.8 3.8 0 1 1 12 15.8A3.8 3.8 0 0 1 12 8.2Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M19 12A7.3 7.3 0 0 0 18.8 10.3L21 8.7L19.3 5.7L16.8 6.4A7.2 7.2 0 0 0 15.3 5.4L15 2.8H9L8.7 5.4A7.2 7.2 0 0 0 7.2 6.4L4.7 5.7L3 8.7L5.2 10.3A7.3 7.3 0 0 0 5 12C5 12.6 5.1 13.2 5.2 13.7L3 15.3L4.7 18.3L7.2 17.6C7.7 18 8.2 18.3 8.7 18.6L9 21.2H15L15.3 18.6C15.8 18.3 16.3 18 16.8 17.6L19.3 18.3L21 15.3L18.8 13.7C18.9 13.2 19 12.6 19 12Z"
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
@@ -647,12 +814,424 @@ function QuickAdd({ token, projects, onTaskCreated, onProjectCreated, inline = f
   )
 }
 
+function SettingsPage({
+  token,
+  settingsDraft,
+  settingsSavedMessage,
+  onUpdateSetting,
+  onSaveSettings,
+  onResetSettings,
+  onBackToTasks,
+}) {
+  const [activeSection, setActiveSection] = useState('user')
+  const [backupFile, setBackupFile] = useState(null)
+  const [restoreConfirm, setRestoreConfirm] = useState('')
+  const [backupStatus, setBackupStatus] = useState('')
+  const [backupError, setBackupError] = useState('')
+  const [isDownloadingBackup, setIsDownloadingBackup] = useState(false)
+  const [isRestoringBackup, setIsRestoringBackup] = useState(false)
+  const sections = [
+    {
+      id: 'user',
+      label: 'User',
+      description: 'Display name, reply-to email, and timezone defaults.',
+    },
+    {
+      id: 'smtp',
+      label: 'Email SMTP',
+      description: 'Outgoing SMTP host, auth, and sender identity.',
+    },
+    {
+      id: 'ai',
+      label: 'AI And Privacy',
+      description: 'AI mode, cloud controls, and redaction preferences.',
+    },
+    {
+      id: 'taskList',
+      label: 'Task List',
+      description: 'Default view and list behavior when opening tasks.',
+    },
+    {
+      id: 'backupRestore',
+      label: 'Backup & Restore',
+      description: 'Download a database backup or restore from a backup file.',
+    },
+  ]
+  const activeSectionMeta = sections.find((section) => section.id === activeSection) || sections[0]
+
+  async function handleDownloadBackup() {
+    setBackupError('')
+    setBackupStatus('')
+    setIsDownloadingBackup(true)
+    try {
+      const { blob, filename } = await downloadDatabaseBackup(token)
+      const objectUrl = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = objectUrl
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+      URL.revokeObjectURL(objectUrl)
+      setBackupStatus(`Backup downloaded: ${filename}`)
+    } catch (error) {
+      setBackupError(error.message)
+    } finally {
+      setIsDownloadingBackup(false)
+    }
+  }
+
+  async function handleRestoreBackup() {
+    if (!backupFile) {
+      setBackupError('Choose a backup file first.')
+      return
+    }
+    if (restoreConfirm.trim().toUpperCase() !== 'RESTORE') {
+      setBackupError('Type RESTORE to confirm before restoring.')
+      return
+    }
+
+    setBackupError('')
+    setBackupStatus('')
+    setIsRestoringBackup(true)
+    try {
+      const response = await restoreDatabaseBackup(token, backupFile, 'RESTORE')
+      setBackupStatus(response?.message || 'Database restore completed. Please sign in again.')
+      setBackupFile(null)
+      setRestoreConfirm('')
+    } catch (error) {
+      setBackupError(error.message)
+    } finally {
+      setIsRestoringBackup(false)
+    }
+  }
+
+  function renderSectionContent() {
+    if (activeSectionMeta.id === 'user') {
+      return (
+        <div className="settings-detail-card">
+          <label className="settings-field" htmlFor="settings-display-name">
+            <span>Display name</span>
+            <input
+              id="settings-display-name"
+              value={settingsDraft.profile.displayName}
+              onChange={(event) => onUpdateSetting('profile', 'displayName', event.target.value)}
+              placeholder="Your name"
+            />
+          </label>
+          <label className="settings-field" htmlFor="settings-reply-to-email">
+            <span>Reply-to email</span>
+            <input
+              id="settings-reply-to-email"
+              type="email"
+              value={settingsDraft.profile.replyToEmail}
+              onChange={(event) => onUpdateSetting('profile', 'replyToEmail', event.target.value)}
+              placeholder="name@example.com"
+            />
+          </label>
+          <label className="settings-field" htmlFor="settings-timezone">
+            <span>Time zone</span>
+            <input
+              id="settings-timezone"
+              value={settingsDraft.profile.timezone}
+              onChange={(event) => onUpdateSetting('profile', 'timezone', event.target.value)}
+              placeholder="UTC"
+            />
+          </label>
+        </div>
+      )
+    }
+
+    if (activeSectionMeta.id === 'smtp') {
+      return (
+        <div className="settings-detail-card">
+          <label className="settings-checkbox" htmlFor="settings-smtp-enabled">
+            <input
+              id="settings-smtp-enabled"
+              type="checkbox"
+              checked={settingsDraft.smtp.enabled}
+              onChange={(event) => onUpdateSetting('smtp', 'enabled', event.target.checked)}
+            />
+            <span>Enable SMTP</span>
+          </label>
+          <div className="settings-field-row">
+            <label className="settings-field" htmlFor="settings-smtp-host">
+              <span>Host</span>
+              <input
+                id="settings-smtp-host"
+                value={settingsDraft.smtp.host}
+                onChange={(event) => onUpdateSetting('smtp', 'host', event.target.value)}
+                placeholder="smtp.example.com"
+                disabled={!settingsDraft.smtp.enabled}
+              />
+            </label>
+            <label className="settings-field settings-field-small" htmlFor="settings-smtp-port">
+              <span>Port</span>
+              <input
+                id="settings-smtp-port"
+                value={settingsDraft.smtp.port}
+                onChange={(event) => onUpdateSetting('smtp', 'port', event.target.value)}
+                placeholder="587"
+                disabled={!settingsDraft.smtp.enabled}
+              />
+            </label>
+          </div>
+          <label className="settings-field" htmlFor="settings-smtp-security">
+            <span>Security</span>
+            <select
+              id="settings-smtp-security"
+              value={settingsDraft.smtp.security}
+              onChange={(event) => onUpdateSetting('smtp', 'security', event.target.value)}
+              disabled={!settingsDraft.smtp.enabled}
+            >
+              <option value="starttls">STARTTLS</option>
+              <option value="ssl_tls">SSL/TLS</option>
+              <option value="none">None</option>
+            </select>
+          </label>
+          <label className="settings-field" htmlFor="settings-smtp-username">
+            <span>Username</span>
+            <input
+              id="settings-smtp-username"
+              value={settingsDraft.smtp.username}
+              onChange={(event) => onUpdateSetting('smtp', 'username', event.target.value)}
+              placeholder="smtp-user"
+              disabled={!settingsDraft.smtp.enabled}
+            />
+          </label>
+          <label className="settings-field" htmlFor="settings-smtp-password">
+            <span>Password</span>
+            <input
+              id="settings-smtp-password"
+              type="password"
+              value={settingsDraft.smtp.password}
+              onChange={(event) => onUpdateSetting('smtp', 'password', event.target.value)}
+              placeholder="App password"
+              disabled={!settingsDraft.smtp.enabled}
+            />
+          </label>
+          <div className="settings-field-row">
+            <label className="settings-field" htmlFor="settings-smtp-from-name">
+              <span>From name</span>
+              <input
+                id="settings-smtp-from-name"
+                value={settingsDraft.smtp.fromName}
+                onChange={(event) => onUpdateSetting('smtp', 'fromName', event.target.value)}
+                placeholder="Task Hub"
+                disabled={!settingsDraft.smtp.enabled}
+              />
+            </label>
+            <label className="settings-field" htmlFor="settings-smtp-from-email">
+              <span>From email</span>
+              <input
+                id="settings-smtp-from-email"
+                type="email"
+                value={settingsDraft.smtp.fromEmail}
+                onChange={(event) => onUpdateSetting('smtp', 'fromEmail', event.target.value)}
+                placeholder="tasks@example.com"
+                disabled={!settingsDraft.smtp.enabled}
+              />
+            </label>
+          </div>
+        </div>
+      )
+    }
+
+    if (activeSectionMeta.id === 'ai') {
+      return (
+        <div className="settings-detail-card">
+          <label className="settings-field" htmlFor="settings-ai-mode">
+            <span>AI mode</span>
+            <select
+              id="settings-ai-mode"
+              value={settingsDraft.ai.mode}
+              onChange={(event) => onUpdateSetting('ai', 'mode', event.target.value)}
+            >
+              <option value="off">Off</option>
+              <option value="local">Local</option>
+              <option value="cloud">Cloud</option>
+              <option value="hybrid">Hybrid</option>
+            </select>
+          </label>
+          <label className="settings-checkbox" htmlFor="settings-ai-allow-cloud">
+            <input
+              id="settings-ai-allow-cloud"
+              type="checkbox"
+              checked={settingsDraft.ai.allowCloudAi}
+              onChange={(event) => onUpdateSetting('ai', 'allowCloudAi', event.target.checked)}
+            />
+            <span>Allow cloud AI requests</span>
+          </label>
+          <label className="settings-checkbox" htmlFor="settings-ai-redact-sensitive">
+            <input
+              id="settings-ai-redact-sensitive"
+              type="checkbox"
+              checked={settingsDraft.ai.redactSensitivePatterns}
+              onChange={(event) => onUpdateSetting('ai', 'redactSensitivePatterns', event.target.checked)}
+            />
+            <span>Redact sensitive patterns before AI processing</span>
+          </label>
+          <label className="settings-field" htmlFor="settings-ai-local-url">
+            <span>Local AI base URL</span>
+            <input
+              id="settings-ai-local-url"
+              value={settingsDraft.ai.localBaseUrl}
+              onChange={(event) => onUpdateSetting('ai', 'localBaseUrl', event.target.value)}
+              placeholder="http://local-ai:8000"
+            />
+          </label>
+        </div>
+      )
+    }
+
+    if (activeSectionMeta.id === 'backupRestore') {
+      return (
+        <div className="settings-detail-card">
+          <div className="settings-backup-block">
+            <h3>Create Backup</h3>
+            <p className="settings-backup-text">
+              Download the current database as a JSON backup fixture file.
+            </p>
+            <button type="button" onClick={handleDownloadBackup} disabled={isDownloadingBackup}>
+              {isDownloadingBackup ? 'Preparing Backup...' : 'Download Backup'}
+            </button>
+          </div>
+          <div className="settings-backup-block">
+            <h3>Restore Database</h3>
+            <p className="settings-backup-warning">
+              Warning: restoring will replace the current database contents.
+            </p>
+            <label className="settings-field" htmlFor="settings-backup-file">
+              <span>Backup file</span>
+              <input
+                id="settings-backup-file"
+                type="file"
+                accept="application/json,.json"
+                onChange={(event) => setBackupFile(event.target.files?.[0] || null)}
+              />
+            </label>
+            <label className="settings-field" htmlFor="settings-restore-confirm">
+              <span>Type RESTORE to confirm</span>
+              <input
+                id="settings-restore-confirm"
+                value={restoreConfirm}
+                onChange={(event) => setRestoreConfirm(event.target.value)}
+                placeholder="RESTORE"
+              />
+            </label>
+            <button
+              type="button"
+              className="settings-restore-button"
+              onClick={handleRestoreBackup}
+              disabled={isRestoringBackup}
+            >
+              {isRestoringBackup ? 'Restoring...' : 'Restore Database'}
+            </button>
+          </div>
+          {backupStatus ? <p className="settings-backup-success">{backupStatus}</p> : null}
+          {backupError ? <p className="settings-backup-error">{backupError}</p> : null}
+        </div>
+      )
+    }
+
+    return (
+      <div className="settings-detail-card">
+        <label className="settings-field" htmlFor="settings-default-area">
+          <span>Default area view</span>
+          <select
+            id="settings-default-area"
+            value={settingsDraft.taskList.defaultArea}
+            onChange={(event) => onUpdateSetting('taskList', 'defaultArea', event.target.value)}
+          >
+            <option value="all">All Tasks</option>
+            <option value="work">Work</option>
+            <option value="personal">Personal</option>
+          </select>
+        </label>
+        <label className="settings-checkbox" htmlFor="settings-default-group-priority">
+          <input
+            id="settings-default-group-priority"
+            type="checkbox"
+            checked={settingsDraft.taskList.groupByPriorityDefault}
+            onChange={(event) => onUpdateSetting('taskList', 'groupByPriorityDefault', event.target.checked)}
+          />
+          <span>Default to grouped-by-priority task list</span>
+        </label>
+      </div>
+    )
+  }
+
+  return (
+    <section className="settings-page">
+      <div className="settings-header">
+        <div>
+          <h1>Settings</h1>
+          <p>Configure user profile, SMTP email delivery, AI/privacy, and task list defaults.</p>
+        </div>
+        <button type="button" onClick={onBackToTasks}>
+          Back To Tasks
+        </button>
+      </div>
+      <form className="settings-form" onSubmit={onSaveSettings}>
+        <div className="settings-layout">
+          <aside className="settings-nav-sidebar" aria-label="Settings sections">
+            <p className="settings-nav-title">Sections</p>
+            <div className="settings-nav-list">
+              {sections.map((section) => (
+                <button
+                  key={section.id}
+                  type="button"
+                  className={
+                    activeSectionMeta.id === section.id
+                      ? 'settings-nav-button settings-nav-button-active'
+                      : 'settings-nav-button'
+                  }
+                  onClick={() => setActiveSection(section.id)}
+                >
+                  <span className="settings-nav-button-label">{section.label}</span>
+                  <span className="settings-nav-button-description">{section.description}</span>
+                </button>
+              ))}
+            </div>
+          </aside>
+          <section className="settings-detail-panel">
+            <header className="settings-detail-header">
+              <h2>{activeSectionMeta.label}</h2>
+              <p>{activeSectionMeta.description}</p>
+            </header>
+            {renderSectionContent()}
+          </section>
+        </div>
+        <div className="settings-actions">
+          <button type="submit">Save Settings</button>
+          <button type="button" className="settings-reset" onClick={onResetSettings}>
+            Reset To Defaults
+          </button>
+          <p className="settings-note">
+            Profile and preference settings are currently stored per-browser. Backup/restore runs against
+            the backend database.
+          </p>
+        </div>
+        {settingsSavedMessage ? <p className="settings-saved-message">{settingsSavedMessage}</p> : null}
+      </form>
+    </section>
+  )
+}
+
 function Dashboard({ token, onLogout }) {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const initialSettings = useMemo(() => loadAppSettings(), [])
+  const isSettingsView = location.pathname === '/settings'
   const [tasks, setTasks] = useState([])
   const [taskTotal, setTaskTotal] = useState(0)
   const [projects, setProjects] = useState([])
-  const [activeView, setActiveView] = useState({ type: 'all' })
-  const [groupByPriority, setGroupByPriority] = useState(false)
+  const [activeView, setActiveView] = useState(() => initialTaskViewFromSettings(initialSettings))
+  const [groupByPriority, setGroupByPriority] = useState(
+    () => initialSettings.taskList.groupByPriorityDefault
+  )
+  const [settingsDraft, setSettingsDraft] = useState(initialSettings)
+  const [settingsSavedMessage, setSettingsSavedMessage] = useState('')
   const [error, setError] = useState('')
   const [reloadCounter, setReloadCounter] = useState(0)
   const [updatingTaskIds, setUpdatingTaskIds] = useState(new Set())
@@ -782,6 +1361,9 @@ function Dashboard({ token, onLogout }) {
   }, [token])
 
   useEffect(() => {
+    if (isSettingsView) {
+      return undefined
+    }
     let active = true
     getTasks(token, taskQueryParams)
       .then((taskData) => {
@@ -799,7 +1381,7 @@ function Dashboard({ token, onLogout }) {
     return () => {
       active = false
     }
-  }, [token, taskQueryParams, reloadCounter])
+  }, [token, taskQueryParams, reloadCounter, isSettingsView])
 
   function handleTaskCreated() {
     setReloadCounter((value) => value + 1)
@@ -812,6 +1394,51 @@ function Dashboard({ token, onLogout }) {
       }
       return [...current, project]
     })
+  }
+
+  function openTaskView(nextView) {
+    setActiveView(nextView)
+    if (isSettingsView) {
+      navigate('/')
+    }
+  }
+
+  function openSettingsView() {
+    navigate('/settings')
+  }
+
+  function handleUpdateSetting(section, key, value) {
+    setSettingsSavedMessage('')
+    setSettingsDraft((current) => ({
+      ...current,
+      [section]: {
+        ...current[section],
+        [key]: value,
+      },
+    }))
+  }
+
+  function handleSaveSettings(event) {
+    event.preventDefault()
+    saveAppSettings(settingsDraft)
+    setSettingsSavedMessage('Settings saved.')
+    setGroupByPriority(Boolean(settingsDraft.taskList.groupByPriorityDefault))
+    if (settingsDraft.taskList.defaultArea === 'work') {
+      setActiveView({ type: 'area', area: 'work' })
+    } else if (settingsDraft.taskList.defaultArea === 'personal') {
+      setActiveView({ type: 'area', area: 'personal' })
+    } else {
+      setActiveView({ type: 'all' })
+    }
+  }
+
+  function handleResetSettings() {
+    const reset = cloneDefaultAppSettings()
+    setSettingsDraft(reset)
+    saveAppSettings(reset)
+    setSettingsSavedMessage('Settings reset to defaults.')
+    setGroupByPriority(Boolean(reset.taskList.groupByPriorityDefault))
+    setActiveView({ type: 'all' })
   }
 
   async function handleToggleComplete(task, completed) {
@@ -1134,7 +1761,7 @@ function Dashboard({ token, onLogout }) {
             <button
               type="button"
               className={activeView.type === 'all' ? 'view-button view-button-active' : 'view-button'}
-              onClick={() => setActiveView({ type: 'all' })}
+              onClick={() => openTaskView({ type: 'all' })}
             >
               All Tasks
             </button>
@@ -1147,7 +1774,7 @@ function Dashboard({ token, onLogout }) {
                   ? 'view-button view-button-active'
                   : 'view-button'
               }
-              onClick={() => setActiveView({ type: 'area', area: 'work' })}
+              onClick={() => openTaskView({ type: 'area', area: 'work' })}
             >
               Work
             </button>
@@ -1161,7 +1788,7 @@ function Dashboard({ token, onLogout }) {
                         ? 'view-button view-button-sub view-button-active'
                         : 'view-button view-button-sub'
                     }
-                    onClick={() => setActiveView({ type: 'project', projectId: project.id })}
+                    onClick={() => openTaskView({ type: 'project', projectId: project.id })}
                   >
                     {project.name}
                   </button>
@@ -1177,7 +1804,7 @@ function Dashboard({ token, onLogout }) {
                   ? 'view-button view-button-active'
                   : 'view-button'
               }
-              onClick={() => setActiveView({ type: 'area', area: 'personal' })}
+              onClick={() => openTaskView({ type: 'area', area: 'personal' })}
             >
               Personal
             </button>
@@ -1191,7 +1818,7 @@ function Dashboard({ token, onLogout }) {
                         ? 'view-button view-button-sub view-button-active'
                         : 'view-button view-button-sub'
                     }
-                    onClick={() => setActiveView({ type: 'project', projectId: project.id })}
+                    onClick={() => openTaskView({ type: 'project', projectId: project.id })}
                   >
                     {project.name}
                   </button>
@@ -1209,36 +1836,72 @@ function Dashboard({ token, onLogout }) {
             />{' '}
             By Priority
           </label>
+          <button
+            type="button"
+            className={
+              isSettingsView
+                ? 'sidebar-settings-button sidebar-settings-button-active'
+                : 'sidebar-settings-button'
+            }
+            onClick={openSettingsView}
+            aria-label="Open settings"
+            title="Settings"
+          >
+            <CogIcon />
+            <span>Settings</span>
+          </button>
         </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
           <div className="topbar-main">
-            <div className="search-row">
-              <input placeholder="Search tasks" aria-label="Search tasks" />
-              <div className="search-toggles">
-                <label className="semantic-toggle">
-                  <input type="checkbox" /> Semantic
-                </label>
+            {isSettingsView ? (
+              <div className="settings-topbar-summary">
+                <h1>App Settings</h1>
+                <p>Manage profile defaults, SMTP email delivery, privacy, and task list behavior.</p>
               </div>
-            </div>
-            <QuickAdd
-              token={token}
-              projects={projects}
-              onTaskCreated={handleTaskCreated}
-              onProjectCreated={handleProjectCreated}
-              inline
-            />
+            ) : (
+              <>
+                <div className="search-row">
+                  <input placeholder="Search tasks" aria-label="Search tasks" />
+                  <div className="search-toggles">
+                    <label className="semantic-toggle">
+                      <input type="checkbox" /> Semantic
+                    </label>
+                  </div>
+                </div>
+                <QuickAdd
+                  token={token}
+                  projects={projects}
+                  onTaskCreated={handleTaskCreated}
+                  onProjectCreated={handleProjectCreated}
+                  inline
+                />
+              </>
+            )}
           </div>
           <button onClick={onLogout}>Log Out</button>
         </header>
 
-        <section className="content">
-          <h1>{activeViewLabel}</h1>
-          <p>{taskCountLabel}</p>
-          {error ? <p className="error-text">{error}</p> : null}
-          <table className="tasks-table">
+        {isSettingsView ? (
+          <section className="content">
+            <SettingsPage
+              token={token}
+              settingsDraft={settingsDraft}
+              settingsSavedMessage={settingsSavedMessage}
+              onUpdateSetting={handleUpdateSetting}
+              onSaveSettings={handleSaveSettings}
+              onResetSettings={handleResetSettings}
+              onBackToTasks={() => navigate('/')}
+            />
+          </section>
+        ) : (
+          <section className="content">
+            <h1>{activeViewLabel}</h1>
+            <p>{taskCountLabel}</p>
+            {error ? <p className="error-text">{error}</p> : null}
+            <table className="tasks-table">
             <thead>
               <tr>
                 <th className="expand-header"></th>
@@ -1320,7 +1983,7 @@ function Dashboard({ token, onLogout }) {
                       <div className="task-cell-content">{task.title}</div>
                     </td>
                     <td>
-                      <div className="task-cell-content">{task.area}</div>
+                      <div className="task-cell-content">{formatAreaLabel(task.area)}</div>
                     </td>
                     <td>
                       <div className="task-cell-content">
@@ -1485,8 +2148,9 @@ function Dashboard({ token, onLogout }) {
                 </tr>
               ) : null}
             </tbody>
-          </table>
-        </section>
+            </table>
+          </section>
+        )}
       </main>
       {attachmentPreview ? (
         <div
@@ -1598,6 +2262,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<AuthPage onLoggedIn={handleLogin} />} />
       <Route path="/" element={<Dashboard token={token} onLogout={handleLogout} />} />
+      <Route path="/settings" element={<Dashboard token={token} onLogout={handleLogout} />} />
       <Route path="/quick-add" element={<QuickAddMobile token={token} />} />
     </Routes>
   )

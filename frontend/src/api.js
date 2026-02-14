@@ -123,3 +123,39 @@ export async function uploadTaskAttachment(token, taskId, file) {
     body,
   })
 }
+
+export async function downloadDatabaseBackup(token) {
+  const headers = {}
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
+  const response = await fetch(`${API_BASE}/ops/database/backup`, {
+    method: 'GET',
+    headers,
+  })
+
+  if (!response.ok) {
+    const contentType = response.headers.get('content-type') || ''
+    const data = contentType.includes('application/json') ? await response.json() : null
+    const message = data?.message || data?.detail || `Request failed (${response.status})`
+    throw new Error(message)
+  }
+
+  const blob = await response.blob()
+  const contentDisposition = response.headers.get('content-disposition') || ''
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/)
+  const filename = filenameMatch?.[1] || 'taskhub-backup.json'
+  return { blob, filename }
+}
+
+export async function restoreDatabaseBackup(token, backupFile, confirm = 'RESTORE') {
+  const body = new FormData()
+  body.append('backup_file', backupFile)
+  body.append('confirm', confirm)
+  return request('/ops/database/restore', {
+    method: 'POST',
+    token,
+    body,
+  })
+}
