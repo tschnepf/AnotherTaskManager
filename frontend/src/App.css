@@ -145,16 +145,73 @@ button {
   border-top: 1px solid var(--line);
 }
 
+.sidebar-controls {
+  display: grid;
+  gap: 10px;
+}
+
 .sidebar-toggle {
-  display: inline-flex;
+  width: 100%;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 12px;
   color: var(--muted);
   font-size: 13px;
 }
 
-.sidebar-toggle input {
-  accent-color: var(--accent);
+.sidebar-switch {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
+.sidebar-switch-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.sidebar-switch-slider {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: #24303d;
+  border: 1px solid #324253;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
+}
+
+.sidebar-switch-slider::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #d6dee7;
+  transition: transform 140ms ease;
+}
+
+.sidebar-switch-input:checked + .sidebar-switch-slider {
+  background: #18345d;
+  border-color: #2f63a8;
+}
+
+.sidebar-switch-input:checked + .sidebar-switch-slider::after {
+  transform: translateX(18px);
+}
+
+.sidebar-switch-input:focus-visible + .sidebar-switch-slider {
+  outline: 2px solid #6ea8ff;
+  outline-offset: 2px;
 }
 
 .sidebar-settings-button {

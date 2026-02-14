@@ -1832,22 +1832,32 @@ function Dashboard({ token, onLogout }) {
           </li>
         </ul>
         <div className="sidebar-footer">
-          <label className="sidebar-toggle">
-            <input
-              type="checkbox"
-              checked={groupByPriority}
-              onChange={(e) => setGroupByPriority(e.target.checked)}
-            />{' '}
-            By Priority
-          </label>
-          <label className="sidebar-toggle">
-            <input
-              type="checkbox"
-              checked={includeHistory}
-              onChange={(event) => setIncludeHistory(event.target.checked)}
-            />{' '}
-            History
-          </label>
+          <div className="sidebar-controls">
+            <label className="sidebar-toggle">
+              <span>By Priority</span>
+              <span className="sidebar-switch">
+                <input
+                  className="sidebar-switch-input"
+                  type="checkbox"
+                  checked={groupByPriority}
+                  onChange={(e) => setGroupByPriority(e.target.checked)}
+                />
+                <span className="sidebar-switch-slider" aria-hidden="true" />
+              </span>
+            </label>
+            <label className="sidebar-toggle">
+              <span>History</span>
+              <span className="sidebar-switch">
+                <input
+                  className="sidebar-switch-input"
+                  type="checkbox"
+                  checked={includeHistory}
+                  onChange={(event) => setIncludeHistory(event.target.checked)}
+                />
+                <span className="sidebar-switch-slider" aria-hidden="true" />
+              </span>
+            </label>
+          </div>
           <button
             type="button"
             className={
