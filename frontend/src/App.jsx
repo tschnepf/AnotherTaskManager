@@ -1230,6 +1230,7 @@ function Dashboard({ token, onLogout }) {
   const [groupByPriority, setGroupByPriority] = useState(
     () => initialSettings.taskList.groupByPriorityDefault
   )
+  const [includeHistory, setIncludeHistory] = useState(false)
   const [settingsDraft, setSettingsDraft] = useState(initialSettings)
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('')
   const [error, setError] = useState('')
@@ -1282,8 +1283,11 @@ function Dashboard({ token, onLogout }) {
     if (groupByPriority) {
       params.sort_mode = 'priority_manual'
     }
+    if (includeHistory) {
+      params.include_history = 'true'
+    }
     return params
-  }, [activeView, groupByPriority])
+  }, [activeView, groupByPriority, includeHistory])
 
   useEffect(() => {
     if (activeView.type !== 'project') {
@@ -1835,6 +1839,14 @@ function Dashboard({ token, onLogout }) {
               onChange={(e) => setGroupByPriority(e.target.checked)}
             />{' '}
             By Priority
+          </label>
+          <label className="sidebar-toggle">
+            <input
+              type="checkbox"
+              checked={includeHistory}
+              onChange={(event) => setIncludeHistory(event.target.checked)}
+            />{' '}
+            History
           </label>
           <button
             type="button"

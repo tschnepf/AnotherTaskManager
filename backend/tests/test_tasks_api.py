@@ -92,6 +92,13 @@ def test_tasks_list_hides_done_items_older_than_24_hours():
         area=Task.Area.WORK,
         status=Task.Status.INBOX,
     )
+    archived_task = Task.objects.create(
+        organization=org,
+        created_by_user=user,
+        title="Archived",
+        area=Task.Area.WORK,
+        status=Task.Status.ARCHIVED,
+    )
 
     token = RefreshToken.for_user(user)
     client = APIClient()
@@ -103,6 +110,13 @@ def test_tasks_list_hides_done_items_older_than_24_hours():
     assert str(old_done.id) not in returned_ids
     assert str(recent_done.id) in returned_ids
     assert str(open_task.id) in returned_ids
+    assert str(archived_task.id) not in returned_ids
+
+    history_res = client.get("/tasks/?page=1&page_size=50&sort=created_at&order=desc&include_history=true")
+    assert history_res.status_code == 200
+    history_ids = {item["id"] for item in history_res.data["results"]}
+    assert str(old_done.id) in history_ids
+    assert str(archived_task.id) in history_ids
 
 
 @pytest.mark.django_db

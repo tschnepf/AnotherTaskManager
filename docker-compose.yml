@@ -62,6 +62,19 @@ services:
       redis:
         condition: service_healthy
 
+  beat:
+    build:
+      context: .
+      dockerfile: infra/worker/Dockerfile
+    command: ["celery", "-A", "config", "beat", "-l", "info"]
+    env_file:
+      - .env.example
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   web:
     build:
       context: .

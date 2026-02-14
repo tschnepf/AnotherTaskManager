@@ -30,10 +30,13 @@ class TaskViewSet(OrgScopedQuerysetMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = Task.objects.filter(organization=user.organization).order_by("position", "-created_at")
-        done_cutoff = timezone.now() - timedelta(days=1)
-        qs = qs.exclude(
-            Q(status=Task.Status.DONE) & (Q(completed_at__lt=done_cutoff) | Q(completed_at__isnull=True))
-        )
+        include_history = self.request.query_params.get("include_history") == "true"
+        if getattr(self, "action", None) == "list" and not include_history:
+            done_cutoff = timezone.now() - timedelta(days=1)
+            qs = qs.exclude(
+                Q(status=Task.Status.DONE) & (Q(completed_at__lt=done_cutoff) | Q(completed_at__isnull=True))
+            )
+            qs = qs.exclude(status=Task.Status.ARCHIVED)
 
         status_value = self.request.query_params.get("status")
         area = self.request.query_params.get("area")

@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 from urllib.parse import urlparse
+from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -125,6 +126,20 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
 }
+
+TASK_ARCHIVE_CADENCE = os.getenv("TASK_ARCHIVE_CADENCE", "weekly").strip().lower()
+
+CELERY_BEAT_SCHEDULE = {}
+if TASK_ARCHIVE_CADENCE == "weekly":
+    CELERY_BEAT_SCHEDULE["archive-completed-tasks"] = {
+        "task": "tasks.archive_completed",
+        "schedule": crontab(minute=0, hour=2, day_of_week="monday"),
+    }
+elif TASK_ARCHIVE_CADENCE == "monthly":
+    CELERY_BEAT_SCHEDULE["archive-completed-tasks"] = {
+        "task": "tasks.archive_completed",
+        "schedule": crontab(minute=0, hour=2, day_of_month="1"),
+    }
 
 # Allow same-origin iframe rendering so in-app media previews (PDF/image) can load.
 X_FRAME_OPTIONS = "SAMEORIGIN"
