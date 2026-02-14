@@ -1,0 +1,12 @@
+Django
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+psycopg[binary]
+celery
+redis
+pgvector
+pytest
+pytest-django
+ruff
+pip-audit

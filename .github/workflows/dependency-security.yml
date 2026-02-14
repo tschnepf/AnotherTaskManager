@@ -1,0 +1,82 @@
+name: Dependency Security Scan
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+  push:
+    branches:
+      - main
+      - master
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-scan:
+    name: Dependency And Image Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+
+      - name: Validate lockfile presence
+        run: |
+          set -eu
+
+          if [ -d backend ] && [ ! -f backend/requirements.txt ]; then
+            echo "backend directory exists but backend/requirements.txt is missing."
+            echo "Create and commit the lockfile per Spec/dependency-security-checklist.md"
+            exit 1
+          fi
+
+          if [ -d frontend ] && [ ! -f frontend/package-lock.json ]; then
+            echo "frontend directory exists but frontend/package-lock.json is missing."
+            echo "Create and commit the lockfile per Spec/dependency-security-checklist.md"
+            exit 1
+          fi
+
+      - name: Python dependency audit
+        if: ${{ hashFiles('backend/requirements.txt') != '' }}
+        run: |
+          set -eu
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip-audit
+          pip-audit -r backend/requirements.txt
+
+      - name: Node dependency audit
+        if: ${{ hashFiles('frontend/package-lock.json') != '' }}
+        run: |
+          set -eu
+          npm audit --prefix frontend --audit-level=high
+
+      - name: Install Trivy
+        run: |
+          set -eu
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | \
+            sudo sh -s -- -b /usr/local/bin
+          trivy --version
+
+      - name: Repository filesystem vulnerability scan
+        run: |
+          set -eu
+          trivy fs --severity HIGH,CRITICAL --exit-code 1 --no-progress .
