@@ -1,6 +1,8 @@
 services:
   db:
     image: pgvector/pgvector:pg17
+    container_name: taskhub-db
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-taskhub}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -15,6 +17,8 @@ services:
 
   redis:
     image: redis:7
+    container_name: taskhub-redis
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -23,10 +27,12 @@ services:
 
   api:
     build:
-      context: .
+      context: /mnt/user/appdata/AnotherTaskManager
       dockerfile: infra/api/Dockerfile
-    ports:
-      - "${API_PORT:-8001}:8000"
+    container_name: taskhub-api
+    restart: unless-stopped
+    expose:
+      - "8000"
     volumes:
       - taskhub_media:/app/backend/media
     env_file:
@@ -56,8 +62,10 @@ services:
 
   worker:
     build:
-      context: .
+      context: /mnt/user/appdata/AnotherTaskManager
       dockerfile: infra/worker/Dockerfile
+    container_name: taskhub-worker
+    restart: unless-stopped
     volumes:
       - taskhub_media:/app/backend/media
     env_file:
@@ -76,8 +84,10 @@ services:
 
   beat:
     build:
-      context: .
+      context: /mnt/user/appdata/AnotherTaskManager
       dockerfile: infra/worker/Dockerfile
+    container_name: taskhub-beat
+    restart: unless-stopped
     command: ["sh", "-c", "cd backend && celery -A config beat -l info"]
     volumes:
       - taskhub_media:/app/backend/media
@@ -97,10 +107,12 @@ services:
 
   web:
     build:
-      context: .
+      context: /mnt/user/appdata/AnotherTaskManager
       dockerfile: infra/web/Dockerfile
+    container_name: taskhub-web
+    restart: unless-stopped
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - "${WEB_PORT:-9632}:80"
     depends_on:
       api:
         condition: service_healthy
@@ -112,6 +124,8 @@ services:
 
   local-ai:
     image: ghcr.io/go-skynet/local-ai:latest
+    container_name: taskhub-local-ai
+    restart: unless-stopped
     profiles: ["local-ai"]
 
 volumes:

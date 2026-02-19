@@ -80,6 +80,16 @@ else:
 CORS_ALLOWED_ORIGINS = [
     origin for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8080").split(",") if origin
 ]
+CSRF_TRUSTED_ORIGINS = [
+    origin
+    for origin in os.getenv(
+        "CSRF_TRUSTED_ORIGINS",
+        ",".join(CORS_ALLOWED_ORIGINS),
+    ).split(",")
+    if origin
+]
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
