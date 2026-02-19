@@ -1,4 +1,5 @@
 import re
+import base64
 from html import escape
 from uuid import uuid4
 
@@ -153,27 +154,29 @@ def ingest_raw_email_for_org(
     )
 
     extracted_saved_attachments = []
-    cid_to_url = {}
+    cid_to_inline_data = {}
     for index, attachment in enumerate(extracted_attachments, start=1):
         original_name = str(attachment.get("name") or "").strip() or f"attachment-{index}"
+        content_type = str(attachment.get("content_type") or "application/octet-stream").strip().lower()
+        content_bytes = bytes(attachment["content"])
         saved_attachment = _save_task_attachment(
             organization_id=str(organization.id),
             task_id=str(task.id),
             attachment_name=original_name,
-            content=bytes(attachment["content"]),
+            content=content_bytes,
         )
         extracted_saved_attachments.append(saved_attachment)
 
         content_id = str(attachment.get("content_id") or "").strip().lower()
-        if content_id and content_id not in cid_to_url:
-            cid_to_url[content_id] = saved_attachment["url"]
+        if content_id and content_id not in cid_to_inline_data:
+            cid_to_inline_data[content_id] = _inline_data_url(content_type, content_bytes)
 
     rendered_preview = _render_email_preview_html(
         subject=subject,
         sender=sender,
         html_body=html_body,
         plain_body=cleaned_body_text,
-        cid_to_url=cid_to_url,
+        cid_to_inline_data=cid_to_inline_data,
         listed_attachments=[original_email_attachment, *extracted_saved_attachments],
     )
     preview_attachment = _save_task_attachment(
@@ -194,7 +197,7 @@ def _save_task_attachment(*, organization_id: str, task_id: str, attachment_name
     saved_path = default_storage.save(relative_path, ContentFile(content))
     return {
         "name": str(attachment_name or "").strip() or safe_name,
-        "url": default_storage.url(saved_path),
+        "path": saved_path,
     }
 
 
@@ -214,23 +217,20 @@ def _render_email_preview_html(
     sender: str,
     html_body: str,
     plain_body: str,
-    cid_to_url: dict[str, str],
+    cid_to_inline_data: dict[str, str],
     listed_attachments: list[dict],
 ) -> str:
     sanitized_html = _sanitize_email_html(html_body)
     if sanitized_html:
-        body_markup = _replace_cid_references(sanitized_html, cid_to_url)
+        body_markup = _replace_cid_references(sanitized_html, cid_to_inline_data)
     else:
         fallback_text = escape(str(plain_body or "").strip() or "(No email body detected.)")
         body_markup = f"<pre>{fallback_text}</pre>"
 
     attachment_items = "".join(
-        (
-            f'<li><a href="{escape(str(item.get("url") or ""), quote=True)}" '
-            f'target="_blank" rel="noopener noreferrer">{escape(str(item.get("name") or "Attachment"))}</a></li>'
-        )
+        f"<li>{escape(str(item.get('name') or 'Attachment'))}</li>"
         for item in listed_attachments
-        if str(item.get("url") or "").strip()
+        if str(item.get("name") or "").strip()
     )
     attachments_markup = (
         f"<section><h2>Attachments</h2><ul>{attachment_items}</ul></section>"
@@ -285,17 +285,24 @@ def _sanitize_email_html(raw_html: str) -> str:
     return value
 
 
-def _replace_cid_references(html: str, cid_to_url: dict[str, str]) -> str:
-    if not cid_to_url:
+def _replace_cid_references(html: str, cid_to_inline_data: dict[str, str]) -> str:
+    if not cid_to_inline_data:
         return html
 
     def _replace(match: re.Match) -> str:
         attribute = match.group("attr")
         quote = match.group("quote") or '"'
         cid_value = str(match.group("cid") or "").strip().strip("<>").lower()
-        resolved_url = cid_to_url.get(cid_value)
+        resolved_url = cid_to_inline_data.get(cid_value)
         if not resolved_url:
             return match.group(0)
         return f'{attribute}={quote}{escape(resolved_url, quote=True)}{quote}'
 
     return CID_REFERENCE_RE.sub(_replace, html)
+
+
+def _inline_data_url(content_type: str, content: bytes) -> str:
+    if not str(content_type or "").startswith("image/"):
+        return ""
+    encoded = base64.b64encode(bytes(content)).decode("ascii")
+    return f"data:{content_type};base64,{encoded}"

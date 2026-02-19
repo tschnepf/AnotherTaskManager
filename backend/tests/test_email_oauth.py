@@ -11,6 +11,7 @@ from core.email_oauth_views import (
     GOOGLE_OAUTH_TOKEN_URL,
     GOOGLE_USERINFO_URL,
 )
+from core.crypto import ENCRYPTED_VALUE_PREFIX
 from core.models import Organization, User
 from tasks.models import Task
 
@@ -95,7 +96,8 @@ def test_gmail_oauth_exchange_connects_org(monkeypatch):
 
     org.refresh_from_db()
     assert org.gmail_oauth_email == "gmail-user@example.com"
-    assert org.gmail_oauth_refresh_token == "refresh-token"
+    assert org.gmail_oauth_refresh_token.startswith(ENCRYPTED_VALUE_PREFIX)
+    assert org.get_gmail_oauth_refresh_token() == "refresh-token"
 
 
 @pytest.mark.django_db

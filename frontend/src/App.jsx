@@ -9,6 +9,7 @@ import {
   disconnectGoogleEmailOAuth,
   downloadDatabaseBackup,
   exchangeGoogleEmailOAuthCode,
+  getAuthSession,
   getEmailCaptureSettings,
   getProjects,
   getTasks,
@@ -28,8 +29,6 @@ import {
 } from './api'
 import './App.css'
 
-const TOKEN_KEY = 'taskhub_access_token'
-const REFRESH_TOKEN_KEY = 'taskhub_refresh_token'
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 const LIVE_SYNC_TIMEOUT_SECONDS = 20
 const LIVE_SYNC_POLL_INTERVAL_MS = 1000
@@ -47,10 +46,8 @@ const PREVIEWABLE_IMAGE_EXTENSIONS = new Set([
   'gif',
   'webp',
   'bmp',
-  'svg',
   'avif',
 ])
-const PREVIEWABLE_HTML_EXTENSIONS = new Set(['html', 'htm'])
 const PREVIEWABLE_TEXT_EXTENSIONS = new Set([
   'eml',
   'txt',
@@ -367,12 +364,13 @@ function normalizeAttachments(attachments) {
         return null
       }
       const name = String(attachment.name || '').trim()
+      const path = String(attachment.path || '').trim()
       const rawUrl = String(attachment.url || '').trim()
       let url = rawUrl
       if (rawUrl) {
         try {
           const parsed = new URL(rawUrl, window.location.origin)
-          if (parsed.pathname.startsWith('/media/')) {
+          if (parsed.pathname.startsWith('/tasks/attachments/file')) {
             url = `${window.location.origin}${parsed.pathname}${parsed.search}${parsed.hash}`
           }
         } catch {
@@ -382,15 +380,16 @@ function normalizeAttachments(attachments) {
       if (!url) {
         return null
       }
-      return { name: name || 'Attachment', url }
+      return { name: name || 'Attachment', path, url }
     })
     .filter(Boolean)
 }
 
 function attachmentExtension(attachment) {
   const name = String(attachment?.name || '').trim()
+  const path = String(attachment?.path || '').trim()
   const url = String(attachment?.url || '').trim()
-  const candidate = name || url
+  const candidate = name || path || url
   if (!candidate) {
     return ''
   }
@@ -420,9 +419,6 @@ function attachmentPreviewType(attachment) {
   }
   if (PREVIEWABLE_IMAGE_EXTENSIONS.has(extension)) {
     return 'image'
-  }
-  if (PREVIEWABLE_HTML_EXTENSIONS.has(extension)) {
-    return 'html'
   }
   if (PREVIEWABLE_TEXT_EXTENSIONS.has(extension)) {
     return 'text'
@@ -789,8 +785,8 @@ function AuthPage({ onLoggedIn }) {
     event.preventDefault()
     setError('')
     try {
-      const data = await login(email, password)
-      onLoggedIn(data.access, data.refresh)
+      await login(email, password)
+      await onLoggedIn()
     } catch (e) {
       setError(e.message)
     }
@@ -3147,31 +3143,14 @@ function QuickAddMobile({ token }) {
 export default function App() {
   const navigate = useNavigate()
   const location = useLocation()
-  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || '')
-  const [refreshToken, setRefreshToken] = useState(() => localStorage.getItem(REFRESH_TOKEN_KEY) || '')
-
-  const persistSession = useCallback((nextAccessToken, nextRefreshToken) => {
-    if (typeof nextAccessToken === 'string' && nextAccessToken) {
-      localStorage.setItem(TOKEN_KEY, nextAccessToken)
-      setToken(nextAccessToken)
-    }
-    if (typeof nextRefreshToken === 'string') {
-      if (nextRefreshToken) {
-        localStorage.setItem(REFRESH_TOKEN_KEY, nextRefreshToken)
-        setRefreshToken(nextRefreshToken)
-      } else {
-        localStorage.removeItem(REFRESH_TOKEN_KEY)
-        setRefreshToken('')
-      }
-    }
-  }, [])
+  const [authReady, setAuthReady] = useState(false)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const token = isAuthenticated ? 'cookie-session' : ''
 
   const clearSession = useCallback(
     (redirectToLogin = true) => {
-      localStorage.removeItem(TOKEN_KEY)
-      localStorage.removeItem(REFRESH_TOKEN_KEY)
-      setToken('')
-      setRefreshToken('')
+      setIsAuthenticated(false)
+      setAuthReady(true)
       if (redirectToLogin) {
         navigate('/login', { replace: true })
       }
@@ -3179,13 +3158,27 @@ export default function App() {
     [navigate]
   )
 
+  useEffect(() => {
+    let active = true
+    getAuthSession()
+      .then(() => {
+        if (!active) return
+        setIsAuthenticated(true)
+        setAuthReady(true)
+      })
+      .catch(() => {
+        if (!active) return
+        setIsAuthenticated(false)
+        setAuthReady(true)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
   useLayoutEffect(() => {
     configureAuthHandlers({
-      getAccessToken: () => localStorage.getItem(TOKEN_KEY) || '',
-      getRefreshToken: () => localStorage.getItem(REFRESH_TOKEN_KEY) || '',
-      setTokens: ({ access, refresh }) => {
-        persistSession(access, refresh)
-      },
       clearTokens: () => {
         clearSession(true)
       },
@@ -3194,27 +3187,34 @@ export default function App() {
     return () => {
       configureAuthHandlers({})
     }
-  }, [clearSession, persistSession])
+  }, [clearSession])
 
-  function handleLogin(accessToken, nextRefreshToken) {
-    persistSession(accessToken, typeof nextRefreshToken === 'string' ? nextRefreshToken : '')
+  async function handleLogin() {
+    await getAuthSession()
+    setIsAuthenticated(true)
+    setAuthReady(true)
     navigate('/', { replace: true })
   }
 
   async function handleLogout() {
-    const currentRefreshToken = refreshToken || localStorage.getItem(REFRESH_TOKEN_KEY) || ''
-    if (currentRefreshToken) {
-      try {
-        await logoutSession(currentRefreshToken)
-      } catch {
-        // Continue local sign-out even if backend token blacklist fails.
-      }
+    try {
+      await logoutSession()
+    } catch {
+      // Continue local sign-out even if backend logout/blacklist fails.
     }
     clearSession(true)
   }
 
-  if (!token && !refreshToken && location.pathname !== '/login') {
+  if (!authReady) {
+    return null
+  }
+
+  if (!isAuthenticated && location.pathname !== '/login') {
     return <Navigate to="/login" replace />
+  }
+
+  if (isAuthenticated && location.pathname === '/login') {
+    return <Navigate to="/" replace />
   }
 
   return (

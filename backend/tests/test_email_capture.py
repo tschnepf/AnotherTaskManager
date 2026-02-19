@@ -7,6 +7,8 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import Organization, User
+from core.security import INBOUND_TOKEN_HASH_PREFIX
+from core.crypto import ENCRYPTED_VALUE_PREFIX
 from tasks.models import Project, Task
 
 
@@ -77,6 +79,12 @@ def test_email_capture_settings_can_be_configured_by_owner():
     assert response.data["inbound_email_address"] == "tasks@example.com"
     assert response.data["inbound_email_token"]
     assert response.data["inbound_email_whitelist"] == ["approved@example.com", "other@example.com"]
+    org.refresh_from_db()
+    assert org.inbound_email_token.startswith(INBOUND_TOKEN_HASH_PREFIX)
+
+    get_response = client.get("/settings/email-capture")
+    assert get_response.status_code == 200
+    assert get_response.data["inbound_email_token"] == ""
 
 
 @pytest.mark.django_db
@@ -227,8 +235,7 @@ def test_inbound_email_capture_strips_embedded_headers_and_saves_real_attachment
     assert any(name.endswith(".eml") for name in attachment_names)
 
     for attachment in response.data["attachments"]:
-        attachment_path = attachment["url"].replace("/media/", "", 1)
-        assert default_storage.exists(attachment_path)
+        assert default_storage.exists(attachment["path"])
 
 
 @pytest.mark.django_db
@@ -324,12 +331,13 @@ def test_inbound_email_capture_saves_rendered_email_preview_with_inline_images_a
 
     preview_attachment = next(attachment for attachment in attachments if attachment["name"] == "email-preview.html")
     inline_image_attachment = next(attachment for attachment in attachments if attachment["name"] == "photo.png")
-    preview_path = preview_attachment["url"].replace("/media/", "", 1)
+    preview_path = preview_attachment["path"]
     with default_storage.open(preview_path, mode="rb") as preview_file:
         preview_html = preview_file.read().decode("utf-8")
 
     assert "https://example.com/spec-review" in preview_html
-    assert inline_image_attachment["url"] in preview_html
+    assert inline_image_attachment["name"] in preview_html
+    assert "data:image/png;base64" in preview_html
 
 
 @pytest.mark.django_db
@@ -590,7 +598,8 @@ def test_email_capture_settings_can_store_imap_fields_without_returning_password
 
     org.refresh_from_db()
     assert org.imap_username == "imap-user@example.com"
-    assert org.imap_password == "secret-password"
+    assert org.imap_password.startswith(ENCRYPTED_VALUE_PREFIX)
+    assert org.get_imap_password() == "secret-password"
 
 
 @pytest.mark.django_db

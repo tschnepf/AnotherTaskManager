@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<OfficeApp
+  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
+  xsi:type="MailApp"
+>
+  <Id>cb1f6208-cccc-4869-9b59-f133b73eb3b0</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>AnotherTaskManager</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Task Hub" />
+  <Description DefaultValue="Create Task Hub tasks from the current email." />
+  <IconUrl DefaultValue="https://taskhub.example.com/outlook-addin/assets/icon-32.png" />
+  <HighResolutionIconUrl DefaultValue="https://taskhub.example.com/outlook-addin/assets/icon-80.png" />
+  <SupportUrl DefaultValue="https://taskhub.example.com/" />
+
+  <AppDomains>
+    <AppDomain>https://taskhub.example.com</AppDomain>
+  </AppDomains>
+
+  <Hosts>
+    <Host Name="Mailbox" />
+  </Hosts>
+
+  <Requirements>
+    <Sets>
+      <Set Name="Mailbox" MinVersion="1.14" />
+    </Sets>
+  </Requirements>
+
+  <FormSettings>
+    <Form xsi:type="ItemRead">
+      <DesktopSettings>
+        <SourceLocation DefaultValue="https://taskhub.example.com/outlook-addin/taskpane.html" />
+        <RequestedHeight>320</RequestedHeight>
+      </DesktopSettings>
+    </Form>
+  </FormSettings>
+
+  <Permissions>ReadItem</Permissions>
+  <Rule xsi:type="RuleCollection" Mode="Or">
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read" />
+  </Rule>
+  <DisableEntityHighlighting>false</DisableEntityHighlighting>
+
+  <VersionOverrides
+    xmlns="http://schemas.microsoft.com/office/mailappversionoverrides"
+    xsi:type="VersionOverridesV1_0"
+  >
+    <VersionOverrides
+      xmlns="http://schemas.microsoft.com/office/mailappversionoverrides/1.1"
+      xsi:type="VersionOverridesV1_1"
+    >
+      <Requirements>
+        <bt:Sets DefaultMinVersion="1.14">
+          <bt:Set Name="Mailbox" />
+        </bt:Sets>
+      </Requirements>
+      <Hosts>
+        <Host xsi:type="MailHost">
+          <DesktopFormFactor>
+            <FunctionFile resid="Commands.Url" />
+            <ExtensionPoint xsi:type="MessageReadCommandSurface">
+              <OfficeTab id="TabDefault">
+                <Group id="TaskHub.Group">
+                  <Label resid="TaskHub.GroupLabel" />
+                  <Control xsi:type="Button" id="TaskHub.OpenPane">
+                    <Label resid="TaskHub.OpenPane.Label" />
+                    <Supertip>
+                      <Title resid="TaskHub.OpenPane.Label" />
+                      <Description resid="TaskHub.OpenPane.Tooltip" />
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="TaskHub.Icon.16" />
+                      <bt:Image size="32" resid="TaskHub.Icon.32" />
+                      <bt:Image size="80" resid="TaskHub.Icon.80" />
+                    </Icon>
+                    <Action xsi:type="ShowTaskpane">
+                      <SourceLocation resid="Taskpane.Url" />
+                      <SupportsPinning>true</SupportsPinning>
+                    </Action>
+                  </Control>
+                </Group>
+              </OfficeTab>
+            </ExtensionPoint>
+          </DesktopFormFactor>
+        </Host>
+      </Hosts>
+      <Resources>
+        <bt:Images>
+          <bt:Image id="TaskHub.Icon.16" DefaultValue="https://taskhub.example.com/outlook-addin/assets/icon-16.png" />
+          <bt:Image id="TaskHub.Icon.32" DefaultValue="https://taskhub.example.com/outlook-addin/assets/icon-32.png" />
+          <bt:Image id="TaskHub.Icon.80" DefaultValue="https://taskhub.example.com/outlook-addin/assets/icon-80.png" />
+        </bt:Images>
+        <bt:Urls>
+          <bt:Url id="Commands.Url" DefaultValue="https://taskhub.example.com/outlook-addin/commands.html" />
+          <bt:Url id="Taskpane.Url" DefaultValue="https://taskhub.example.com/outlook-addin/taskpane.html" />
+        </bt:Urls>
+        <bt:ShortStrings>
+          <bt:String id="TaskHub.GroupLabel" DefaultValue="Task Hub" />
+          <bt:String id="TaskHub.OpenPane.Label" DefaultValue="Add Task" />
+        </bt:ShortStrings>
+        <bt:LongStrings>
+          <bt:String id="TaskHub.OpenPane.Tooltip" DefaultValue="Capture this email and create a Task Hub task." />
+        </bt:LongStrings>
+      </Resources>
+    </VersionOverrides>
+  </VersionOverrides>
+</OfficeApp>

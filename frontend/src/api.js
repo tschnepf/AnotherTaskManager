@@ -1,45 +1,17 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 const REFRESH_PATH = '/auth/refresh'
+const CSRF_PATH = '/auth/csrf'
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE'])
 
 let authHandlers = {
-  getAccessToken: null,
-  getRefreshToken: null,
-  setTokens: null,
   clearTokens: null,
 }
 let refreshPromise = null
+let csrfPromise = null
 
 export function configureAuthHandlers(handlers = {}) {
   authHandlers = {
-    getAccessToken:
-      typeof handlers.getAccessToken === 'function' ? handlers.getAccessToken : null,
-    getRefreshToken:
-      typeof handlers.getRefreshToken === 'function' ? handlers.getRefreshToken : null,
-    setTokens: typeof handlers.setTokens === 'function' ? handlers.setTokens : null,
     clearTokens: typeof handlers.clearTokens === 'function' ? handlers.clearTokens : null,
-  }
-}
-
-function readAccessToken(explicitToken) {
-  if (typeof explicitToken === 'string' && explicitToken.trim()) {
-    return explicitToken
-  }
-  if (typeof authHandlers.getAccessToken === 'function') {
-    return authHandlers.getAccessToken() || ''
-  }
-  return ''
-}
-
-function readRefreshToken() {
-  if (typeof authHandlers.getRefreshToken === 'function') {
-    return authHandlers.getRefreshToken() || ''
-  }
-  return ''
-}
-
-function storeTokens(tokens) {
-  if (typeof authHandlers.setTokens === 'function') {
-    authHandlers.setTokens(tokens)
   }
 }
 
@@ -47,6 +19,21 @@ function clearTokens() {
   if (typeof authHandlers.clearTokens === 'function') {
     authHandlers.clearTokens()
   }
+}
+
+function readCsrfTokenCookie() {
+  if (typeof document === 'undefined') {
+    return ''
+  }
+
+  const cookies = document.cookie ? document.cookie.split(';') : []
+  for (const cookie of cookies) {
+    const [name, ...rest] = cookie.trim().split('=')
+    if (name === 'csrftoken') {
+      return decodeURIComponent(rest.join('='))
+    }
+  }
+  return ''
 }
 
 async function parseJsonBody(response) {
@@ -57,37 +44,67 @@ async function parseJsonBody(response) {
   return response.json()
 }
 
+async function ensureCsrfCookie() {
+  const existingToken = readCsrfTokenCookie()
+  if (existingToken) {
+    return existingToken
+  }
+  if (csrfPromise) {
+    return csrfPromise
+  }
+
+  csrfPromise = (async () => {
+    const response = await fetch(`${API_BASE}${CSRF_PATH}`, {
+      method: 'GET',
+      credentials: 'include',
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to initialize CSRF protection (${response.status})`)
+    }
+
+    const data = await parseJsonBody(response)
+    return readCsrfTokenCookie() || data?.csrfToken || ''
+  })()
+
+  try {
+    return await csrfPromise
+  } finally {
+    csrfPromise = null
+  }
+}
+
 async function refreshAccessToken() {
   if (refreshPromise) {
     return refreshPromise
   }
 
-  const refreshToken = readRefreshToken()
-  if (!refreshToken) {
-    clearTokens()
-    return ''
-  }
-
   refreshPromise = (async () => {
-    const response = await fetch(`${API_BASE}${REFRESH_PATH}`, {
-      method: 'POST',
-      headers: {
+    try {
+      const csrfToken = await ensureCsrfCookie()
+      const headers = {
         'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ refresh: refreshToken }),
-    })
+      }
+      if (csrfToken) {
+        headers['X-CSRFToken'] = csrfToken
+      }
 
-    const data = await parseJsonBody(response)
-    const access = data?.access || ''
-    const nextRefresh = data?.refresh
+      const response = await fetch(`${API_BASE}${REFRESH_PATH}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: JSON.stringify({}),
+      })
 
-    if (!response.ok || !access) {
+      if (!response.ok) {
+        clearTokens()
+        return false
+      }
+      return true
+    } catch {
       clearTokens()
-      return ''
+      return false
     }
-
-    storeTokens({ access, refresh: typeof nextRefresh === 'string' ? nextRefresh : undefined })
-    return access
   })()
 
   try {
@@ -97,23 +114,25 @@ async function refreshAccessToken() {
   }
 }
 
-async function send(
-  path,
-  { method = 'GET', token, body, retryOnAuthFailure = true, signal } = {}
-) {
+async function send(path, { method = 'GET', token, body, retryOnAuthFailure = true, signal } = {}) {
+  const normalizedMethod = String(method || 'GET').toUpperCase()
   const isFormData = typeof FormData !== 'undefined' && body instanceof FormData
   const headers = {}
+
   if (!isFormData && body !== undefined) {
     headers['Content-Type'] = 'application/json'
   }
 
-  const accessToken = readAccessToken(token)
-  if (accessToken) {
-    headers.Authorization = `Bearer ${accessToken}`
+  if (!SAFE_METHODS.has(normalizedMethod)) {
+    const csrfToken = await ensureCsrfCookie()
+    if (csrfToken) {
+      headers['X-CSRFToken'] = csrfToken
+    }
   }
 
   const response = await fetch(`${API_BASE}${path}`, {
-    method,
+    method: normalizedMethod,
+    credentials: 'include',
     headers,
     signal,
     body: body
@@ -123,12 +142,12 @@ async function send(
       : undefined,
   })
 
-  if (response.status === 401 && retryOnAuthFailure && (accessToken || readRefreshToken())) {
-    const refreshedAccess = await refreshAccessToken()
-    if (refreshedAccess) {
+  if (response.status === 401 && retryOnAuthFailure) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) {
       return send(path, {
-        method,
-        token: refreshedAccess,
+        method: normalizedMethod,
+        token,
         body,
         signal,
         retryOnAuthFailure: false,
@@ -151,16 +170,18 @@ async function request(path, { method = 'GET', token, body, signal } = {}) {
   return data
 }
 
+export async function getAuthSession() {
+  return request('/auth/session', { method: 'GET' })
+}
+
 export async function login(email, password) {
   return request('/auth/login', { method: 'POST', body: { email, password } })
 }
 
-export async function logout(refreshToken) {
+export async function logout() {
   return request('/auth/logout', {
     method: 'POST',
-    body: {
-      refresh: refreshToken,
-    },
+    body: {},
   })
 }
 

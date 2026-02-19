@@ -6,6 +6,7 @@ psycopg[binary]
 celery
 redis
 pgvector
+cryptography
 pytest
 pytest-django
 ruff

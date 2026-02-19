@@ -26,7 +26,12 @@ def test_database_backup_requires_owner_or_admin():
 
 @pytest.mark.django_db
 def test_database_backup_returns_fixture_file_for_owner():
-    org = Organization.objects.create(name="Org A")
+    org = Organization.objects.create(
+        name="Org A",
+        inbound_email_token="plain-token",
+        gmail_oauth_refresh_token="oauth-refresh",
+        imap_password="imap-password",
+    )
     owner = User.objects.create_user(
         email="owner@example.com",
         password="StrongPass123!",
@@ -44,6 +49,10 @@ def test_database_backup_returns_fixture_file_for_owner():
     payload = json.loads(response.content.decode("utf-8"))
     assert isinstance(payload, list)
     assert any(item.get("model") == "core.organization" for item in payload)
+    org_fixture = next(item for item in payload if item.get("model") == "core.organization")
+    assert org_fixture["fields"]["inbound_email_token"] == ""
+    assert org_fixture["fields"]["gmail_oauth_refresh_token"] == ""
+    assert org_fixture["fields"]["imap_password"] == ""
 
 
 @pytest.mark.django_db

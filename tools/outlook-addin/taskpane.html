@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Task Hub Add-in</title>
+    <link rel="stylesheet" href="./taskpane.css" />
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="header">
+        <h1>Task Hub</h1>
+        <p>Create a task from the current message.</p>
+      </header>
+
+      <section class="panel">
+        <label for="taskhub-url">Task Hub URL</label>
+        <input id="taskhub-url" type="url" placeholder="https://taskhub.example.com" />
+
+        <label for="recipient-email">Inbound Recipient Email</label>
+        <input id="recipient-email" type="email" placeholder="inbound@yourdomain.com" />
+
+        <label for="ingest-token">Ingest Token</label>
+        <input id="ingest-token" type="password" placeholder="Paste X-TaskHub-Ingest-Token value" />
+
+        <div class="actions">
+          <button id="save-settings" type="button">Save Settings</button>
+          <button id="capture-email" type="button">Add Current Email</button>
+        </div>
+      </section>
+
+      <section class="panel panel-muted">
+        <p id="current-item" class="current-item">No email selected.</p>
+        <p class="hint">
+          This stores your Task Hub URL/token in Outlook roaming settings so you stay authenticated for this add-in.
+        </p>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+    <script src="./taskpane.js"></script>
+  </body>
+</html>

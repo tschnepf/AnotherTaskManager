@@ -136,7 +136,11 @@ def gmail_oauth_exchange_view(request):
 
     token_payload = token_response.json()
     access_token = str(token_payload.get("access_token") or "").strip()
-    refresh_token = str(token_payload.get("refresh_token") or "").strip() or org.gmail_oauth_refresh_token
+    try:
+        existing_refresh_token = org.get_gmail_oauth_refresh_token()
+    except ValueError:
+        existing_refresh_token = ""
+    refresh_token = str(token_payload.get("refresh_token") or "").strip() or existing_refresh_token
     if not access_token:
         return Response(
             {"error_code": "validation_error", "message": "oauth token exchange returned no access token", "details": {}},
@@ -178,7 +182,7 @@ def gmail_oauth_exchange_view(request):
 
     org.inbound_email_provider = Organization.InboundEmailProvider.GMAIL_OAUTH
     org.gmail_oauth_email = gmail_email
-    org.gmail_oauth_refresh_token = refresh_token
+    org.set_gmail_oauth_refresh_token(refresh_token)
     update_fields = [
         "inbound_email_provider",
         "gmail_oauth_email",
@@ -204,7 +208,7 @@ def gmail_oauth_disconnect_view(request):
 
     org.inbound_email_provider = Organization.InboundEmailProvider.WEBHOOK
     org.gmail_oauth_email = ""
-    org.gmail_oauth_refresh_token = ""
+    org.set_gmail_oauth_refresh_token("")
     org.save(update_fields=["inbound_email_provider", "gmail_oauth_email", "gmail_oauth_refresh_token"])
     return Response(serialize_email_capture_settings(org))
 
@@ -218,7 +222,11 @@ def gmail_oauth_sync_view(request):
             {"error_code": "validation_error", "message": "user must belong to an organization", "details": {}},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    if not org.gmail_oauth_refresh_token:
+    try:
+        refresh_token = org.get_gmail_oauth_refresh_token()
+    except ValueError:
+        refresh_token = ""
+    if not refresh_token:
         return Response(
             {"error_code": "validation_error", "message": "gmail oauth is not connected", "details": {}},
             status=status.HTTP_400_BAD_REQUEST,
@@ -232,7 +240,7 @@ def gmail_oauth_sync_view(request):
     query = str(request.data.get("query") or "is:unread in:inbox").strip()
 
     try:
-        access_token = _refresh_google_access_token(org.gmail_oauth_refresh_token)
+        access_token = _refresh_google_access_token(refresh_token)
     except ValueError as exc:
         return Response(
             {"error_code": "validation_error", "message": str(exc), "details": {}},

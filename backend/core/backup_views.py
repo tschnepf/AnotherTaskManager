@@ -14,6 +14,11 @@ from core.permissions import IsOwnerOrAdmin
 
 RESTORE_CONFIRM_VALUE = "RESTORE"
 MAX_BACKUP_FILE_SIZE_BYTES = 100 * 1024 * 1024
+REDACTED_ORG_FIELDS = {
+    "inbound_email_token",
+    "gmail_oauth_refresh_token",
+    "imap_password",
+}
 
 
 @api_view(["GET"])
@@ -30,7 +35,7 @@ def database_backup_view(request):
             stdout=buffer,
         )
         buffer.seek(0)
-        payload = buffer.read()
+        payload = _redact_sensitive_backup_fields(buffer.read())
     finally:
         buffer.close()
 
@@ -117,12 +122,12 @@ def database_restore_view(request):
 
         call_command("flush", interactive=False, verbosity=0)
         call_command("loaddata", tmp_path, verbosity=0)
-    except Exception as cause:
+    except Exception:
         return Response(
             {
                 "error_code": "restore_failed",
                 "message": "Database restore failed",
-                "details": {"cause": str(cause)},
+                "details": {},
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
@@ -140,3 +145,25 @@ def database_restore_view(request):
         },
         status=status.HTTP_200_OK,
     )
+
+
+def _redact_sensitive_backup_fields(raw_payload: str) -> str:
+    try:
+        data = json.loads(raw_payload)
+    except json.JSONDecodeError:
+        return raw_payload
+    if not isinstance(data, list):
+        return raw_payload
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        if item.get("model") != "core.organization":
+            continue
+        fields = item.get("fields")
+        if not isinstance(fields, dict):
+            continue
+        for field in REDACTED_ORG_FIELDS:
+            if field in fields:
+                fields[field] = ""
+    return json.dumps(data, indent=2)

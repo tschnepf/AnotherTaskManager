@@ -293,7 +293,7 @@ def test_tasks_can_be_grouped_by_priority_then_manual_order():
 
 
 @pytest.mark.django_db
-def test_task_details_notes_and_attachments_can_be_saved_and_read():
+def test_task_details_notes_and_org_scoped_attachments_can_be_saved_and_read():
     org = Organization.objects.create(name="Details Org")
     user = User.objects.create_user(email="details@example.com", password="StrongPass123!", organization=org)
 
@@ -305,22 +305,52 @@ def test_task_details_notes_and_attachments_can_be_saved_and_read():
     assert create_res.status_code == 201
     task_id = create_res.data["id"]
 
+    uploaded = SimpleUploadedFile("details.txt", b"details attachment", content_type="text/plain")
+    upload_res = client.post(
+        f"/tasks/{task_id}/attachments/upload/",
+        {"file": uploaded},
+        format="multipart",
+    )
+    assert upload_res.status_code == 201
+    assert len(upload_res.data["attachments"]) == 1
+
     payload = {
         "notes": "Email thread context and follow-up notes.",
-        "attachments": [
-            {"name": "Email PDF", "url": "https://example.com/email.pdf"},
-            {"name": "Screenshot", "url": "https://example.com/screenshot.png"},
-        ],
+        "attachments": upload_res.data["attachments"],
     }
     patch_res = client.patch(f"/tasks/{task_id}/", payload, format="json")
     assert patch_res.status_code == 200
     assert patch_res.data["notes"] == payload["notes"]
-    assert patch_res.data["attachments"] == payload["attachments"]
+    assert patch_res.data["attachments"][0]["name"] == "details.txt"
+    assert patch_res.data["attachments"][0]["path"].startswith(f"tasks/{org.id}/{task_id}/")
 
     detail_res = client.get(f"/tasks/{task_id}/")
     assert detail_res.status_code == 200
     assert detail_res.data["notes"] == payload["notes"]
-    assert detail_res.data["attachments"] == payload["attachments"]
+    assert detail_res.data["attachments"][0]["path"] == patch_res.data["attachments"][0]["path"]
+
+
+@pytest.mark.django_db
+def test_task_details_reject_external_attachment_urls():
+    org = Organization.objects.create(name="Details Org")
+    user = User.objects.create_user(email="details@example.com", password="StrongPass123!", organization=org)
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    create_res = client.post("/tasks/", {"title": "With details", "area": "work"}, format="json")
+    assert create_res.status_code == 201
+    task_id = create_res.data["id"]
+
+    patch_res = client.patch(
+        f"/tasks/{task_id}/",
+        {
+            "attachments": [{"name": "malicious", "url": "https://evil.example/payload.html"}],
+        },
+        format="json",
+    )
+    assert patch_res.status_code == 400
 
 
 @pytest.mark.django_db
@@ -345,9 +375,95 @@ def test_task_attachment_file_upload_endpoint_appends_attachment():
     assert upload_res.status_code == 201
     assert len(upload_res.data["attachments"]) == 1
     assert upload_res.data["attachments"][0]["name"] == "note.txt"
-    assert "/media/tasks/" in upload_res.data["attachments"][0]["url"]
-    assert upload_res.data["attachments"][0]["url"].endswith("/note.txt")
+    assert upload_res.data["attachments"][0]["path"].startswith(f"tasks/{org.id}/{task_id}/")
+    assert upload_res.data["attachments"][0]["url"].startswith("/tasks/attachments/file?token=")
 
     detail_res = client.get(f"/tasks/{task_id}/")
     assert detail_res.status_code == 200
     assert len(detail_res.data["attachments"]) == 1
+
+    attachment_url = upload_res.data["attachments"][0]["url"]
+    download_res = client.get(attachment_url)
+    assert download_res.status_code == 200
+    assert b"hello task attachment" in b"".join(download_res.streaming_content)
+
+
+@pytest.mark.django_db
+def test_task_attachment_file_requires_authenticated_user():
+    org = Organization.objects.create(name="Upload Org")
+    user = User.objects.create_user(email="upload-auth@example.com", password="StrongPass123!", organization=org)
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    create_res = client.post("/tasks/", {"title": "Upload task", "area": "work"}, format="json")
+    assert create_res.status_code == 201
+    task_id = create_res.data["id"]
+
+    uploaded = SimpleUploadedFile("note.txt", b"hello task attachment", content_type="text/plain")
+    upload_res = client.post(
+        f"/tasks/{task_id}/attachments/upload/",
+        {"file": uploaded},
+        format="multipart",
+    )
+    assert upload_res.status_code == 201
+    attachment_url = upload_res.data["attachments"][0]["url"]
+
+    anonymous_client = APIClient()
+    download_res = anonymous_client.get(attachment_url)
+    assert download_res.status_code == 401
+
+
+@pytest.mark.django_db
+def test_task_attachment_file_denies_cross_org_access():
+    org_a = Organization.objects.create(name="Upload Org A")
+    user_a = User.objects.create_user(email="upload-org-a@example.com", password="StrongPass123!", organization=org_a)
+    org_b = Organization.objects.create(name="Upload Org B")
+    user_b = User.objects.create_user(email="upload-org-b@example.com", password="StrongPass123!", organization=org_b)
+
+    token_a = RefreshToken.for_user(user_a)
+    token_b = RefreshToken.for_user(user_b)
+
+    client_a = APIClient()
+    client_a.credentials(HTTP_AUTHORIZATION=f"Bearer {token_a.access_token}")
+    client_b = APIClient()
+    client_b.credentials(HTTP_AUTHORIZATION=f"Bearer {token_b.access_token}")
+
+    create_res = client_a.post("/tasks/", {"title": "Upload task", "area": "work"}, format="json")
+    assert create_res.status_code == 201
+    task_id = create_res.data["id"]
+
+    uploaded = SimpleUploadedFile("note.txt", b"hello task attachment", content_type="text/plain")
+    upload_res = client_a.post(
+        f"/tasks/{task_id}/attachments/upload/",
+        {"file": uploaded},
+        format="multipart",
+    )
+    assert upload_res.status_code == 201
+    attachment_url = upload_res.data["attachments"][0]["url"]
+
+    cross_org_download = client_b.get(attachment_url)
+    assert cross_org_download.status_code == 404
+
+
+@pytest.mark.django_db
+def test_task_attachment_upload_rejects_active_content_extensions():
+    org = Organization.objects.create(name="Upload Org")
+    user = User.objects.create_user(email="upload@example.com", password="StrongPass123!", organization=org)
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    create_res = client.post("/tasks/", {"title": "Upload task", "area": "work"}, format="json")
+    assert create_res.status_code == 201
+    task_id = create_res.data["id"]
+
+    uploaded = SimpleUploadedFile("payload.html", b"<script>alert(1)</script>", content_type="text/html")
+    upload_res = client.post(
+        f"/tasks/{task_id}/attachments/upload/",
+        {"file": uploaded},
+        format="multipart",
+    )
+    assert upload_res.status_code == 400

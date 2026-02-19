@@ -2,6 +2,12 @@ from rest_framework import serializers
 from django.db.models import Max
 
 from core.models import User
+from tasks.attachments import (
+    build_attachment_access_url,
+    normalize_attachment_input,
+    path_matches_org,
+    path_matches_task,
+)
 from tasks.models import Project, Tag, Task
 from tasks.transitions import is_valid_transition
 
@@ -75,7 +81,24 @@ class TaskSerializer(serializers.ModelSerializer):
             if not is_valid_transition(instance.status, new_status):
                 raise serializers.ValidationError({"status": "invalid transition"})
 
+        tags = attrs.get("tags")
+        if tags is not None:
+            invalid_tag = next((tag for tag in tags if tag.organization_id != org.id), None)
+            if invalid_tag is not None:
+                raise serializers.ValidationError("all tags must belong to the same organization")
+
         return attrs
+
+    def get_fields(self):
+        fields = super().get_fields()
+        request = self.context.get("request")
+        tag_field = fields.get("tag_ids")
+        if tag_field is not None:
+            if request and getattr(request, "user", None) and request.user.is_authenticated:
+                tag_field.queryset = Tag.objects.filter(organization=request.user.organization)
+            else:
+                tag_field.queryset = Tag.objects.none()
+        return fields
 
     def validate_attachments(self, value):
         if value in (None, ""):
@@ -86,21 +109,31 @@ class TaskSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("attachments cannot contain more than 25 items")
 
         normalized = []
+        request = self.context["request"]
+        org_id = str(request.user.organization_id)
+        task_id = str(self.instance.id) if self.instance is not None else ""
         for item in value:
             if not isinstance(item, dict):
                 raise serializers.ValidationError("each attachment must be an object")
-            name = str(item.get("name") or "").strip()
-            url = str(item.get("url") or "").strip()
-            if not url:
-                raise serializers.ValidationError("attachment url is required")
-            if len(url) > 4000:
-                raise serializers.ValidationError("attachment url is too long")
+            try:
+                normalized_item = normalize_attachment_input(item)
+            except ValueError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
+
+            name = str(normalized_item["name"] or "").strip()
+            path = str(normalized_item["path"] or "").strip()
             if len(name) > 255:
                 raise serializers.ValidationError("attachment name is too long")
+            if len(path) > 4000:
+                raise serializers.ValidationError("attachment path is too long")
+            if not path_matches_org(path, org_id):
+                raise serializers.ValidationError("attachment must belong to the same organization")
+            if task_id and not path_matches_task(path, task_id):
+                raise serializers.ValidationError("attachment must belong to the same task")
             normalized.append(
                 {
                     "name": name or "Attachment",
-                    "url": url,
+                    "path": path,
                 }
             )
         return normalized
@@ -142,6 +175,28 @@ class TaskSerializer(serializers.ModelSerializer):
         if tags is not None:
             instance.tags.set(tags)
         return instance
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        attachments = []
+        for item in instance.attachments or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                normalized_item = normalize_attachment_input(item)
+            except ValueError:
+                continue
+            normalized_name = str(normalized_item["name"] or "").strip() or "Attachment"
+            normalized_path = str(normalized_item["path"] or "").strip()
+            attachments.append(
+                {
+                    "name": normalized_name,
+                    "path": normalized_path,
+                    "url": build_attachment_access_url(normalized_path),
+                }
+            )
+        data["attachments"] = attachments
+        return data
 
 
 class ProjectSerializer(serializers.ModelSerializer):

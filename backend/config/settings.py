@@ -1,15 +1,82 @@
 from pathlib import Path
 import os
+import sys
 from urllib.parse import urlparse
+from django.core.exceptions import ImproperlyConfigured
 from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv(
-    "DJANGO_SECRET_KEY", "taskhub-dev-secret-key-change-this-in-production-1234567890"
-)
+RUNNING_TESTS = "PYTEST_CURRENT_TEST" in os.environ or any("pytest" in arg for arg in sys.argv)
+
+if RUNNING_TESTS:
+    os.environ.setdefault("DJANGO_SECRET_KEY", "test-django-secret-key-for-local-tests-only")
+    os.environ.setdefault("TASKHUB_FIELD_ENCRYPTION_KEY", "test-field-encryption-key-for-local-tests-only")
+    os.environ.setdefault("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
+
 DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
-ALLOWED_HOSTS = [h for h in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",") if h]
+
+DEFAULT_DJANGO_SECRET_KEY = "taskhub-dev-secret-key-change-this-in-production-1234567890"
+MIN_DJANGO_SECRET_KEY_LENGTH = 32
+SECRET_KEY = str(os.getenv("DJANGO_SECRET_KEY", "")).strip()
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = DEFAULT_DJANGO_SECRET_KEY
+    else:
+        raise ImproperlyConfigured("DJANGO_SECRET_KEY is required.")
+
+
+def _field_encryption_keys_from_env() -> tuple[str, ...]:
+    keys: list[str] = []
+
+    raw_many = str(os.getenv("TASKHUB_FIELD_ENCRYPTION_KEYS", "")).strip()
+    if raw_many:
+        keys.extend(segment.strip() for segment in raw_many.split(",") if segment.strip())
+
+    raw_single = str(os.getenv("TASKHUB_FIELD_ENCRYPTION_KEY", "")).strip()
+    if raw_single:
+        keys.append(raw_single)
+
+    deduped = []
+    seen = set()
+    for key in keys:
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+
+    if not deduped:
+        raise ImproperlyConfigured(
+            "Missing field encryption key. Set TASKHUB_FIELD_ENCRYPTION_KEY "
+            "or TASKHUB_FIELD_ENCRYPTION_KEYS before starting the app."
+        )
+    return tuple(deduped)
+
+
+TASKHUB_FIELD_ENCRYPTION_KEYS = _field_encryption_keys_from_env()
+
+if not DEBUG and SECRET_KEY == DEFAULT_DJANGO_SECRET_KEY:
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY is using an unsafe default value. Set a strong unique key."
+    )
+if not DEBUG and len(SECRET_KEY) < MIN_DJANGO_SECRET_KEY_LENGTH:
+    raise ImproperlyConfigured(
+        f"DJANGO_SECRET_KEY must be at least {MIN_DJANGO_SECRET_KEY_LENGTH} characters."
+    )
+
+allowed_hosts_raw = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()]
+if not allowed_hosts_raw:
+    if DEBUG:
+        ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
+    else:
+        raise ImproperlyConfigured("DJANGO_ALLOWED_HOSTS is required when DJANGO_DEBUG is false.")
+elif "*" in allowed_hosts_raw:
+    if DEBUG:
+        ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
+    else:
+        raise ImproperlyConfigured("DJANGO_ALLOWED_HOSTS cannot include '*' when DJANGO_DEBUG is false.")
+else:
+    ALLOWED_HOSTS = allowed_hosts_raw
 CORS_ALLOWED_ORIGINS = [
     origin for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8080").split(",") if origin
 ]
@@ -114,18 +181,30 @@ AUTH_USER_MODEL = "core.User"
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "core.authentication.CookieOrHeaderJWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
     "EXCEPTION_HANDLER": "core.exceptions.api_exception_handler",
+    "DEFAULT_THROTTLE_RATES": {
+        "inbound_email_ingest": os.getenv("THROTTLE_INBOUND_EMAIL_INGEST", "60/min"),
+    },
 }
 
 SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
 }
+
+AUTH_COOKIE_ACCESS_NAME = os.getenv("AUTH_COOKIE_ACCESS_NAME", "taskhub_access")
+AUTH_COOKIE_REFRESH_NAME = os.getenv("AUTH_COOKIE_REFRESH_NAME", "taskhub_refresh")
+AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "Lax")
+AUTH_COOKIE_DOMAIN = str(os.getenv("AUTH_COOKIE_DOMAIN", "")).strip() or None
+AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "false" if DEBUG else "true").lower() == "true"
+AUTH_COOKIE_ACCESS_PATH = "/"
+AUTH_COOKIE_REFRESH_PATH = "/auth/refresh"
+CSRF_COOKIE_SECURE = os.getenv("CSRF_COOKIE_SECURE", "false" if DEBUG else "true").lower() == "true"
 
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", os.getenv("REDIS_URL", "redis://redis:6379/0"))
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
@@ -159,3 +238,8 @@ if INBOUND_EMAIL_MODE == "imap":
 
 # Allow same-origin iframe rendering so in-app media previews (PDF/image) can load.
 X_FRAME_OPTIONS = "SAMEORIGIN"
+
+ATTACHMENT_ACCESS_TOKEN_MAX_AGE_SECONDS = os.getenv("ATTACHMENT_ACCESS_TOKEN_MAX_AGE_SECONDS", "3600")
+
+if not DEBUG:
+    SECURE_CONTENT_TYPE_NOSNIFF = True

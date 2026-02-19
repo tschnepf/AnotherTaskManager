@@ -2,13 +2,13 @@ services:
   db:
     image: pgvector/pgvector:pg17
     environment:
-      POSTGRES_DB: taskhub
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-taskhub}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d taskhub"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-taskhub}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -30,7 +30,7 @@ services:
     volumes:
       - taskhub_media:/app/backend/media
     env_file:
-      - .env.example
+      - .env
     environment:
       INBOUND_EMAIL_MODE: ${INBOUND_EMAIL_MODE:-imap}
       IMAP_POLL_INTERVAL_MINUTES: ${IMAP_POLL_INTERVAL_MINUTES:-2}
@@ -61,7 +61,7 @@ services:
     volumes:
       - taskhub_media:/app/backend/media
     env_file:
-      - .env.example
+      - .env
     environment:
       INBOUND_EMAIL_MODE: ${INBOUND_EMAIL_MODE:-imap}
       IMAP_POLL_INTERVAL_MINUTES: ${IMAP_POLL_INTERVAL_MINUTES:-2}
@@ -82,7 +82,7 @@ services:
     volumes:
       - taskhub_media:/app/backend/media
     env_file:
-      - .env.example
+      - .env
     environment:
       INBOUND_EMAIL_MODE: ${INBOUND_EMAIL_MODE:-imap}
       IMAP_POLL_INTERVAL_MINUTES: ${IMAP_POLL_INTERVAL_MINUTES:-2}

@@ -7,7 +7,10 @@ from tasks.email_ingest import parse_eml
 
 def is_imap_configured(organization: Organization) -> bool:
     username = (organization.imap_username or "").strip()
-    password = (organization.imap_password or "").strip()
+    try:
+        password = (organization.get_imap_password() or "").strip()
+    except ValueError:
+        return False
     return bool(username and password)
 
 
@@ -61,7 +64,10 @@ def sync_inbound_imap(organization: Organization, max_messages: int = 25) -> dic
 
 def _imap_config(organization: Organization) -> dict:
     username = (organization.imap_username or "").strip()
-    password = (organization.imap_password or "").strip()
+    try:
+        password = (organization.get_imap_password() or "").strip()
+    except ValueError as exc:
+        raise ValueError("IMAP credentials cannot be decrypted; rotate IMAP password in Settings") from exc
     host = (organization.imap_host or "").strip()
     provider = (organization.imap_provider or "auto").strip().lower()
     if not username or not password:

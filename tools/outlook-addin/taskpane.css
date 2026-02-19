@@ -1,0 +1,123 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: #1f2937;
+  background: linear-gradient(180deg, #f6f9ff 0%, #eef4ff 100%);
+}
+
+.wrap {
+  padding: 14px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0.2px;
+}
+
+.header p {
+  margin: 4px 0 0;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  margin-top: 12px;
+  padding: 12px;
+}
+
+.panel-muted {
+  background: #f8fbff;
+}
+
+label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 8px 0 4px;
+}
+
+input {
+  width: 100%;
+  border: 1px solid #c5d2e7;
+  border-radius: 8px;
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+
+.actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+button {
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 12px;
+}
+
+#save-settings {
+  background: #e5edf9;
+  color: #1f2937;
+}
+
+#capture-email {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+button[disabled] {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.current-item {
+  font-size: 12px;
+  margin: 0;
+}
+
+.hint {
+  color: #4b5563;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.status {
+  font-size: 12px;
+  margin: 0;
+  min-height: 18px;
+}
+
+.status[data-level="error"] {
+  color: #b91c1c;
+}
+
+.status[data-level="success"] {
+  color: #166534;
+}
+
+.status[data-level="info"] {
+  color: #1d4ed8;
+}

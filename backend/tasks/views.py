@@ -1,21 +1,32 @@
 from datetime import timedelta
-import secrets
+import mimetypes
 import time
 from uuid import uuid4
 
 from django.db import transaction
 from django.core.files.storage import default_storage
+from django.http import FileResponse
 from django.utils.text import get_valid_filename
 from django.db.models import Case, Count, IntegerField, Max, Q, Value, When
 from django.utils import timezone
 from rest_framework import status, viewsets
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import SimpleRateThrottle
 
 from ai.semantic import dedupe_candidates, semantic_search_with_fallback
 from core.models import Organization
+from core.security import verify_inbound_ingest_token
+from tasks.attachments import (
+    BLOCKED_UPLOAD_EXTENSIONS,
+    FORCE_DOWNLOAD_EXTENSIONS,
+    attachment_extension,
+    attachment_token_max_age_seconds,
+    decode_attachment_token,
+    path_matches_org,
+)
 from tasks.email_ingest import (
     extract_recipient,
     parse_eml,
@@ -24,6 +35,16 @@ from tasks.email_capture_service import EmailIngestError, ingest_raw_email_for_o
 from tasks.models import Project, Tag, Task
 from tasks.serializers import ProjectSerializer, TagSerializer, TaskSerializer
 from tasks.transitions import is_valid_transition
+
+
+class InboundIngestRateThrottle(SimpleRateThrottle):
+    scope = "inbound_email_ingest"
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": self.get_ident(request),
+        }
 
 
 class OrgScopedQuerysetMixin:
@@ -330,17 +351,26 @@ class TaskViewSet(OrgScopedQuerysetMixin, viewsets.ModelViewSet):
             )
 
         original_name = (uploaded_file.name or "").strip() or "attachment"
+        ext = attachment_extension(original_name)
+        if ext in BLOCKED_UPLOAD_EXTENSIONS:
+            return Response(
+                {
+                    "error_code": "validation_error",
+                    "message": "this file type is not allowed for upload",
+                    "details": {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         safe_name = get_valid_filename(original_name)
         unique_folder = uuid4().hex
         relative_path = f"tasks/{task.organization_id}/{task.id}/{unique_folder}/{safe_name}"
         saved_path = default_storage.save(relative_path, uploaded_file)
-        file_url = default_storage.url(saved_path)
 
         attachments = task.attachments or []
         attachments.append(
             {
                 "name": original_name,
-                "url": file_url,
+                "path": saved_path,
             }
         )
         task.attachments = attachments
@@ -348,7 +378,7 @@ class TaskViewSet(OrgScopedQuerysetMixin, viewsets.ModelViewSet):
 
         return Response(
             {
-                "attachments": attachments,
+                "attachments": TaskSerializer(task, context={"request": request}).data.get("attachments", []),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -436,6 +466,7 @@ def bookmarklet_capture_view(request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([InboundIngestRateThrottle])
 def inbound_email_capture_view(request):
     provided_token = str(request.headers.get("X-TaskHub-Ingest-Token", "")).strip()
     if not provided_token:
@@ -446,10 +477,28 @@ def inbound_email_capture_view(request):
 
     uploaded_eml = request.FILES.get("email") or request.FILES.get("file") or request.FILES.get("message")
     if uploaded_eml is not None:
+        if uploaded_eml.size > 20 * 1024 * 1024:
+            return Response(
+                {
+                    "error_code": "validation_error",
+                    "message": "email payload exceeds 20MB limit",
+                    "details": {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         raw_eml = uploaded_eml.read()
     else:
         raw_eml_text = request.data.get("raw_email")
         raw_eml = str(raw_eml_text).encode("utf-8") if raw_eml_text else b""
+        if len(raw_eml) > 20 * 1024 * 1024:
+            return Response(
+                {
+                    "error_code": "validation_error",
+                    "message": "email payload exceeds 20MB limit",
+                    "details": {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     if not raw_eml:
         return Response(
@@ -482,14 +531,8 @@ def inbound_email_capture_view(request):
         )
 
     organization = Organization.objects.filter(inbound_email_address__iexact=recipient).first()
-    if organization is None:
-        return Response(
-            {"error_code": "not_found", "message": "recipient email is not configured", "details": {}},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    expected_token = organization.inbound_email_token or ""
-    if not expected_token or not secrets.compare_digest(provided_token, expected_token):
+    expected_token = organization.inbound_email_token if organization is not None else ""
+    if not organization or not verify_inbound_ingest_token(provided_token, expected_token):
         return Response(
             {"error_code": "forbidden", "message": "invalid ingest token", "details": {}},
             status=status.HTTP_403_FORBIDDEN,
@@ -513,3 +556,58 @@ def inbound_email_capture_view(request):
 
     serializer = TaskSerializer(task)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def attachment_file_view(request):
+    token = str(request.query_params.get("token") or "").strip()
+    if not token:
+        return Response(
+            {"error_code": "validation_error", "message": "token is required", "details": {}},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        path = decode_attachment_token(token, max_age=attachment_token_max_age_seconds())
+    except Exception:
+        return Response(
+            {"error_code": "not_found", "message": "attachment not found", "details": {}},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if not path:
+        return Response(
+            {"error_code": "not_found", "message": "attachment not found", "details": {}},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if not path_matches_org(path, request.user.organization_id):
+        return Response(
+            {"error_code": "not_found", "message": "attachment not found", "details": {}},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    ext = attachment_extension(path)
+    guessed_content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    force_download = ext in FORCE_DOWNLOAD_EXTENSIONS or request.query_params.get("download") == "1"
+
+    try:
+        file_handle = default_storage.open(path, mode="rb")
+    except Exception:
+        return Response(
+            {"error_code": "not_found", "message": "attachment not found", "details": {}},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    filename = path.rsplit("/", 1)[-1]
+    response = FileResponse(
+        file_handle,
+        content_type=guessed_content_type,
+        as_attachment=force_download,
+        filename=filename,
+    )
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Cache-Control"] = "private, no-store"
+    if ext in FORCE_DOWNLOAD_EXTENSIONS:
+        response["Content-Type"] = "application/octet-stream"
+    return response

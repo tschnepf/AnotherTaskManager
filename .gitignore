@@ -6,5 +6,6 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.unraid.production.example
 .DS_Store
 .tools/

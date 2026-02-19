@@ -3,6 +3,8 @@ from django.urls import path
 from core.auth_views import (
     LoginView,
     RefreshView,
+    auth_session_view,
+    csrf_cookie_view,
     logout_view,
     register_view,
     tenant_check_view,
@@ -19,6 +21,8 @@ from core.settings_views import email_capture_settings_view
 
 urlpatterns = [
     path("auth/register", register_view),
+    path("auth/csrf", csrf_cookie_view),
+    path("auth/session", auth_session_view),
     path("auth/login", LoginView.as_view()),
     path("auth/refresh", RefreshView.as_view()),
     path("auth/logout", logout_view),

@@ -3,6 +3,7 @@ import uuid
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
+from core.crypto import decrypt_secret, encrypt_secret
 from .managers import UserManager
 
 
@@ -38,6 +39,24 @@ class Organization(models.Model):
 
     def __str__(self):
         return self.name
+
+    def set_gmail_oauth_refresh_token(self, raw_token: str) -> None:
+        self.gmail_oauth_refresh_token = encrypt_secret(raw_token)
+
+    def get_gmail_oauth_refresh_token(self) -> str:
+        return decrypt_secret(self.gmail_oauth_refresh_token)
+
+    def has_gmail_oauth_refresh_token(self) -> bool:
+        return bool(self.get_gmail_oauth_refresh_token().strip())
+
+    def set_imap_password(self, raw_password: str) -> None:
+        self.imap_password = encrypt_secret(raw_password)
+
+    def get_imap_password(self) -> str:
+        return decrypt_secret(self.imap_password)
+
+    def has_imap_password(self) -> bool:
+        return bool(self.get_imap_password().strip())
 
 
 class User(AbstractUser):

@@ -1,5 +1,3 @@
-import secrets
-
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status
@@ -8,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.permissions import IsOwnerOrAdmin
+from core.security import rotate_inbound_ingest_token
 from core.email_mode import get_inbound_email_mode
 from tasks.email_imap_service import is_imap_configured
 
@@ -39,6 +38,7 @@ def email_capture_settings_view(request):
     imap_search_criteria = request.data.get("imap_search_criteria", None)
     imap_mark_seen_on_success = request.data.get("imap_mark_seen_on_success", None)
     fields_to_update = []
+    issued_inbound_token = ""
 
     if inbound_email_address is not None:
         normalized = str(inbound_email_address).strip().lower()
@@ -79,13 +79,13 @@ def email_capture_settings_view(request):
         fields_to_update.append("imap_username")
 
     if imap_clear_password:
-        org.imap_password = ""
+        org.set_imap_password("")
         fields_to_update.append("imap_password")
     elif imap_password is not None:
         # Empty string means "leave unchanged"; use imap_clear_password to clear.
         normalized_password = str(imap_password or "")
         if normalized_password.strip():
-            org.imap_password = normalized_password
+            org.set_imap_password(normalized_password)
             fields_to_update.append("imap_password")
 
     if imap_host is not None:
@@ -138,13 +138,20 @@ def email_capture_settings_view(request):
         fields_to_update.append("imap_mark_seen_on_success")
 
     if rotate_token or not org.inbound_email_token:
-        org.inbound_email_token = secrets.token_urlsafe(32)
+        issued_inbound_token, hashed_inbound_token = rotate_inbound_ingest_token()
+        org.inbound_email_token = hashed_inbound_token
         fields_to_update.append("inbound_email_token")
 
     if fields_to_update:
         org.save(update_fields=fields_to_update)
 
-    return Response(serialize_email_capture_settings(org))
+    return Response(
+        serialize_email_capture_settings(
+            org,
+            reveal_inbound_token=bool(issued_inbound_token),
+            issued_inbound_token=issued_inbound_token,
+        )
+    )
 
 
 def _normalize_whitelist(raw_value):
@@ -174,18 +181,32 @@ def _normalize_whitelist(raw_value):
     return normalized
 
 
-def serialize_email_capture_settings(org):
+def serialize_email_capture_settings(
+    org,
+    *,
+    reveal_inbound_token: bool = False,
+    issued_inbound_token: str = "",
+):
     inbound_mode = get_inbound_email_mode()
+    inbound_token = issued_inbound_token if reveal_inbound_token else ""
+    try:
+        imap_password_configured = org.has_imap_password()
+    except ValueError:
+        imap_password_configured = False
+    try:
+        gmail_oauth_connected = org.has_gmail_oauth_refresh_token()
+    except ValueError:
+        gmail_oauth_connected = False
     return {
         "inbound_email_address": org.inbound_email_address,
-        "inbound_email_token": org.inbound_email_token,
+        "inbound_email_token": inbound_token,
         "inbound_email_whitelist": org.inbound_email_whitelist or [],
         "inbound_email_mode": inbound_mode,
         "inbound_email_provider": org.inbound_email_provider,
         "gmail_oauth_email": org.gmail_oauth_email or "",
-        "gmail_oauth_connected": bool(org.gmail_oauth_refresh_token),
+        "gmail_oauth_connected": gmail_oauth_connected,
         "imap_username": org.imap_username or "",
-        "imap_password_configured": bool(org.imap_password),
+        "imap_password_configured": imap_password_configured,
         "imap_host": org.imap_host or "",
         "imap_provider": org.imap_provider or "auto",
         "imap_port": org.imap_port or 993,

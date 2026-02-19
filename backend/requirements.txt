@@ -18,6 +18,8 @@ cachecontrol[filecache]==0.14.4
     # via
     #   cachecontrol
     #   pip-audit
+cffi==2.0.0
+    # via cryptography
 celery==5.6.2
     # via -r backend/requirements.in
 certifi==2026.1.4
@@ -38,6 +40,8 @@ click-repl==0.3.0
     # via celery
 cyclonedx-python-lib==11.6.0
     # via pip-audit
+cryptography==46.0.5
+    # via -r backend/requirements.in
 defusedxml==0.7.1
     # via py-serializable
 django==6.0.2
@@ -106,6 +110,8 @@ pygments==2.19.2
     #   rich
 pyjwt==2.11.0
     # via djangorestframework-simplejwt
+pycparser==3.0
+    # via cffi
 pyparsing==3.3.2
     # via pip-requirements-parser
 pytest==9.0.2

@@ -20,9 +20,6 @@ function jsonResponse(status, data) {
 
 afterEach(() => {
   configureAuthHandlers({
-    getAccessToken: null,
-    getRefreshToken: null,
-    setTokens: null,
     clearTokens: null,
   })
   vi.restoreAllMocks()
@@ -30,36 +27,33 @@ afterEach(() => {
 
 describe('api token refresh', () => {
   it('refreshes and retries once on 401', async () => {
-    const setTokens = vi.fn()
-    configureAuthHandlers({
-      getRefreshToken: () => 'old-refresh',
-      setTokens,
-    })
-
     globalThis.fetch = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(401, { message: 'Unauthorized' }))
-      .mockResolvedValueOnce(jsonResponse(200, { access: 'new-access', refresh: 'new-refresh' }))
+      .mockResolvedValueOnce(jsonResponse(200, { csrfToken: 'csrf-token' }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'refreshed' }))
       .mockResolvedValueOnce(jsonResponse(200, { results: [], total: 0 }))
 
     const result = await getTasks('expired-access')
 
     expect(result.total).toBe(0)
-    expect(setTokens).toHaveBeenCalledWith({ access: 'new-access', refresh: 'new-refresh' })
-    expect(globalThis.fetch).toHaveBeenCalledTimes(3)
-    expect(globalThis.fetch.mock.calls[2][1].headers.Authorization).toBe('Bearer new-access')
+    expect(globalThis.fetch).toHaveBeenCalledTimes(4)
+    expect(globalThis.fetch.mock.calls[1][0]).toContain('/auth/csrf')
+    expect(globalThis.fetch.mock.calls[2][0]).toContain('/auth/refresh')
+    expect(globalThis.fetch.mock.calls[0][1].credentials).toBe('include')
+    expect(globalThis.fetch.mock.calls[3][1].credentials).toBe('include')
   })
 
   it('clears session when refresh fails', async () => {
     const clearTokens = vi.fn()
     configureAuthHandlers({
-      getRefreshToken: () => 'stale-refresh',
       clearTokens,
     })
 
     globalThis.fetch = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(401, { message: 'Unauthorized' }))
+      .mockResolvedValueOnce(jsonResponse(200, { csrfToken: 'csrf-token' }))
       .mockResolvedValueOnce(jsonResponse(401, { message: 'Token is invalid or expired' }))
 
     await expect(getTasks('expired-access')).rejects.toThrow('Unauthorized')
@@ -82,6 +76,6 @@ describe('live task changes', () => {
     expect(globalThis.fetch.mock.calls[0][0]).toContain(
       '/tasks/changes/?timeout_seconds=15&poll_interval_ms=750&cursor=abc%3A123'
     )
-    expect(globalThis.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer access-token')
+    expect(globalThis.fetch.mock.calls[0][1].credentials).toBe('include')
   })
 })
