@@ -86,7 +86,8 @@ def _base_public_url(request) -> str:
 
 
 class MobileMetaView(APIView):
-    permission_classes = [MobileApiEnabledPermission, AllowAny]
+    authentication_classes: list[type] = []
+    permission_classes = [AllowAny]
 
     def get(self, request):
         base_url = _base_public_url(request)
