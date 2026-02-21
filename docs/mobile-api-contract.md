@@ -3,6 +3,10 @@
 ## Base path
 - `/api/mobile/v1`
 
+## Public endpoints
+1. `GET /health/live`
+2. `GET /api/mobile/v1/meta`
+
 ## Core endpoints
 1. `GET /meta`
 2. `GET /session`
@@ -15,9 +19,10 @@
 9. `GET/PATCH /me/preferences`
 10. `GET/PATCH /notifications/preferences`
 11. `POST /devices/register`
-12. `PATCH/DELETE /devices/{id}`
-13. `POST /intents/create-task` (requires `Idempotency-Key`)
-14. `GET /widget/snapshot`
+12. `POST /devices/unregister`
+13. `PATCH/DELETE /devices/{id}`
+14. `POST /intents/create-task` (requires `Idempotency-Key`)
+15. `GET /widget/snapshot`
 
 ## Error envelope
 All non-2xx responses return:

@@ -10,6 +10,7 @@
 ```bash
 bash tools/keycloak/validate-realm-export.sh tools/keycloak/realm-export/taskhub-realm.json
 ```
+7. Validate OIDC public endpoint reachability using `docs/oidc-public-endpoints-runbook.md`.
 
 ## Migration + onboarding
 1. Prepare CSV of users for IdP migration with columns `email,first_name,last_name,enabled`.
