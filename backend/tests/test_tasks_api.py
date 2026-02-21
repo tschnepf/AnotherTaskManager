@@ -120,6 +120,49 @@ def test_tasks_list_hides_done_items_older_than_24_hours():
 
 
 @pytest.mark.django_db
+def test_tasks_list_hides_dated_tasks_until_within_seven_days():
+    org = Organization.objects.create(name="Upcoming Org")
+    user = User.objects.create_user(email="upcoming@example.com", password="StrongPass123!", organization=org)
+
+    visible_task = Task.objects.create(
+        organization=org,
+        created_by_user=user,
+        title="Visible soon",
+        area=Task.Area.WORK,
+        due_at=timezone.now() + timedelta(days=5),
+    )
+    hidden_task = Task.objects.create(
+        organization=org,
+        created_by_user=user,
+        title="Hidden later",
+        area=Task.Area.WORK,
+        due_at=timezone.now() + timedelta(days=18),
+    )
+    undated_task = Task.objects.create(
+        organization=org,
+        created_by_user=user,
+        title="No date",
+        area=Task.Area.WORK,
+    )
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    res = client.get("/tasks/?page=1&page_size=50&sort=position&order=asc")
+    assert res.status_code == 200
+    returned_ids = {item["id"] for item in res.data["results"]}
+    assert str(visible_task.id) in returned_ids
+    assert str(hidden_task.id) not in returned_ids
+    assert str(undated_task.id) in returned_ids
+
+    history_res = client.get("/tasks/?page=1&page_size=50&sort=position&order=asc&include_history=true")
+    assert history_res.status_code == 200
+    history_ids = {item["id"] for item in history_res.data["results"]}
+    assert str(hidden_task.id) in history_ids
+
+
+@pytest.mark.django_db
 def test_tasks_reorder_is_persisted_on_backend():
     org = Organization.objects.create(name="Org Reorder")
     user = User.objects.create_user(email="reorder@example.com", password="StrongPass123!", organization=org)
@@ -254,6 +297,86 @@ def test_task_priority_is_optional_and_updatable():
     clear_res = client.patch(f"/tasks/{task_id}/", {"priority": None}, format="json")
     assert clear_res.status_code == 200
     assert clear_res.data["priority"] is None
+
+
+@pytest.mark.django_db
+def test_recurring_task_requires_due_date():
+    org = Organization.objects.create(name="Recurring Validation Org")
+    user = User.objects.create_user(email="recurring-validation@example.com", password="StrongPass123!", organization=org)
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    create_res = client.post(
+        "/tasks/",
+        {"title": "Recurring task", "area": "work", "recurrence": Task.Recurrence.WEEKLY},
+        format="json",
+    )
+    assert create_res.status_code == 400
+    assert "due_at" in create_res.data.get("details", {})
+
+    valid_create_res = client.post(
+        "/tasks/",
+        {
+            "title": "Recurring task with date",
+            "area": "work",
+            "recurrence": Task.Recurrence.WEEKLY,
+            "due_at": (timezone.now() + timedelta(days=2)).isoformat(),
+        },
+        format="json",
+    )
+    assert valid_create_res.status_code == 201
+
+    clear_due_res = client.patch(
+        f"/tasks/{valid_create_res.data['id']}/",
+        {"due_at": None},
+        format="json",
+    )
+    assert clear_due_res.status_code == 400
+    assert "due_at" in clear_due_res.data.get("details", {})
+
+
+@pytest.mark.django_db
+def test_recurring_task_completion_creates_next_occurrence():
+    org = Organization.objects.create(name="Recurring Org")
+    user = User.objects.create_user(email="recurring@example.com", password="StrongPass123!", organization=org)
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    create_res = client.post(
+        "/tasks/",
+        {
+            "title": "Weekly report",
+            "area": "work",
+            "due_at": (timezone.now() - timedelta(days=10)).isoformat(),
+            "recurrence": Task.Recurrence.WEEKLY,
+        },
+        format="json",
+    )
+    assert create_res.status_code == 201
+    task_id = create_res.data["id"]
+
+    complete_res = client.patch(f"/tasks/{task_id}/", {"status": "done"}, format="json")
+    assert complete_res.status_code == 200
+
+    old_task = Task.objects.get(id=task_id)
+    assert old_task.status == Task.Status.DONE
+
+    recurring_children = Task.objects.filter(
+        organization=org,
+        title="Weekly report",
+        recurrence=Task.Recurrence.WEEKLY,
+        status=Task.Status.INBOX,
+    ).exclude(id=old_task.id)
+    assert recurring_children.count() == 1
+
+    next_task = recurring_children.get()
+    assert next_task.due_at is not None
+    assert next_task.due_at > timezone.now()
+    assert next_task.created_by_user_id == old_task.created_by_user_id
 
 
 @pytest.mark.django_db

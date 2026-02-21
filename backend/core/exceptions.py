@@ -1,6 +1,44 @@
 from uuid import uuid4
 
 from rest_framework.views import exception_handler
+from rest_framework import status
+
+
+def _mobile_error_code(exc, response) -> str:
+    data = response.data
+    if isinstance(data, dict):
+        detail_text = str(data.get("detail") or "").strip().lower()
+        if detail_text in {"invalid_audience", "invalid_token", "insufficient_scope", "onboarding_required"}:
+            return detail_text
+        if isinstance(data.get("error"), dict) and data["error"].get("code"):
+            return str(data["error"]["code"])
+        if data.get("error_code"):
+            return str(data["error_code"])
+        if data.get("code"):
+            return str(data["code"])
+    if getattr(exc, "default_code", None):
+        return str(exc.default_code)
+    if response.status_code == status.HTTP_410_GONE:
+        return "cursor_expired"
+    if response.status_code == status.HTTP_409_CONFLICT:
+        return "idempotency_conflict"
+    if response.status_code == status.HTTP_403_FORBIDDEN:
+        return "insufficient_scope"
+    if response.status_code == status.HTTP_401_UNAUTHORIZED:
+        return "invalid_token"
+    return "api_error"
+
+
+def _mobile_error_message(response) -> str:
+    data = response.data
+    if isinstance(data, dict):
+        detail = data.get("detail")
+        if detail:
+            return str(detail)
+        message = data.get("message")
+        if message:
+            return str(message)
+    return "Request failed"
 
 
 def api_exception_handler(exc, context):
@@ -10,6 +48,19 @@ def api_exception_handler(exc, context):
 
     request = context.get("request")
     request_id = request.headers.get("X-Request-ID") if request else None
+
+    request_path = request.path if request else ""
+    if request_path.startswith("/api/mobile/v1/"):
+        response.data = {
+            "error": {
+                "code": _mobile_error_code(exc, response),
+                "message": _mobile_error_message(response),
+                "details": response.data if isinstance(response.data, dict) else {"detail": str(response.data)},
+            },
+            "request_id": request_id or str(uuid4()),
+        }
+        return response
+
     payload = {
         "error_code": "api_error",
         "message": "Request failed",

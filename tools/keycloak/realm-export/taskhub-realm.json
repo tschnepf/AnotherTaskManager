@@ -1,0 +1,64 @@
+{
+  "realm": "taskhub",
+  "enabled": true,
+  "sslRequired": "none",
+  "clients": [
+    {
+      "clientId": "taskhub-mobile",
+      "publicClient": true,
+      "directAccessGrantsEnabled": false,
+      "standardFlowEnabled": true,
+      "redirectUris": ["taskhubmobile://oauth/callback"],
+      "defaultClientScopes": [
+        "profile",
+        "email",
+        "roles",
+        "mobile.read",
+        "mobile.write",
+        "mobile.sync",
+        "mobile.notify",
+        "taskhub-api-audience"
+      ],
+      "optionalClientScopes": ["offline_access"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "introspection.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "clientScopes": [
+    {"name": "offline_access", "protocol": "openid-connect"},
+    {"name": "mobile.read", "protocol": "openid-connect"},
+    {"name": "mobile.write", "protocol": "openid-connect"},
+    {"name": "mobile.sync", "protocol": "openid-connect"},
+    {"name": "mobile.notify", "protocol": "openid-connect"},
+    {
+      "name": "taskhub-api-audience",
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "taskhub-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "taskhub-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

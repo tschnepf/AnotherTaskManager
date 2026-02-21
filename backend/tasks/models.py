@@ -66,6 +66,13 @@ class Task(models.Model):
         DONE = "done", "Done"
         ARCHIVED = "archived", "Archived"
 
+    class Recurrence(models.TextChoices):
+        NONE = "none", "None"
+        DAILY = "daily", "Daily"
+        WEEKLY = "weekly", "Weekly"
+        MONTHLY = "monthly", "Monthly"
+        YEARLY = "yearly", "Yearly"
+
     class SourceType(models.TextChoices):
         EMAIL = "email", "Email"
         CONVERSATION = "conversation", "Conversation"
@@ -98,6 +105,7 @@ class Task(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.INBOX)
     priority = models.IntegerField(null=True, blank=True)
     due_at = models.DateTimeField(null=True, blank=True)
+    recurrence = models.CharField(max_length=20, choices=Recurrence.choices, default=Recurrence.NONE)
     completed_at = models.DateTimeField(null=True, blank=True)
     source_type = models.CharField(max_length=20, choices=SourceType.choices, default=SourceType.SELF)
     source_link = models.TextField(blank=True)
@@ -137,4 +145,24 @@ class TaskTag(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["task", "tag"], name="task_tag_pk_like")
+        ]
+
+
+class TaskChangeEvent(models.Model):
+    class EventType(models.TextChoices):
+        CREATED = "created", "Created"
+        UPDATED = "updated", "Updated"
+        DELETED = "deleted", "Deleted"
+        ARCHIVED = "archived", "Archived"
+
+    id = models.BigAutoField(primary_key=True)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="task_change_events")
+    event_type = models.CharField(max_length=32, choices=EventType.choices)
+    task_id = models.UUIDField(null=True, blank=True)
+    payload_summary = models.JSONField(default=dict, blank=True)
+    occurred_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["organization", "id"]),
         ]

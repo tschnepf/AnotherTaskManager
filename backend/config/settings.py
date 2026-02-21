@@ -55,6 +55,18 @@ def _field_encryption_keys_from_env() -> tuple[str, ...]:
 
 TASKHUB_FIELD_ENCRYPTION_KEYS = _field_encryption_keys_from_env()
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name, "true" if default else "false")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_csv(name: str, default: str = "") -> list[str]:
+    raw = str(os.getenv(name, default)).strip()
+    if not raw:
+        return []
+    return [piece.strip() for piece in raw.split(",") if piece.strip()]
+
 if not DEBUG and SECRET_KEY == DEFAULT_DJANGO_SECRET_KEY:
     raise ImproperlyConfigured(
         "DJANGO_SECRET_KEY is using an unsafe default value. Set a strong unique key."
@@ -106,6 +118,7 @@ INSTALLED_APPS = [
     "tasks",
     "ai",
     "collaboration",
+    "mobile_api.apps.MobileApiConfig",
 ]
 
 MIDDLEWARE = [
@@ -199,6 +212,9 @@ REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "core.exceptions.api_exception_handler",
     "DEFAULT_THROTTLE_RATES": {
         "inbound_email_ingest": os.getenv("THROTTLE_INBOUND_EMAIL_INGEST", "60/min"),
+        "mobile_auth": os.getenv("MOBILE_RATE_LIMIT_AUTH", "20/min"),
+        "mobile_sync": os.getenv("MOBILE_RATE_LIMIT_SYNC", "120/min"),
+        "mobile_intent": os.getenv("MOBILE_RATE_LIMIT_INTENT", "30/min"),
     },
 }
 
@@ -246,10 +262,74 @@ if INBOUND_EMAIL_MODE == "imap":
         "schedule": crontab(minute=f"*/{imap_poll_interval_minutes}"),
     }
 
+if _env_bool("MOBILE_API_ENABLED", False):
+    CELERY_BEAT_SCHEDULE["mobile-purge-task-change-events"] = {
+        "task": "mobile_api.purge_task_change_events",
+        "schedule": crontab(minute=10, hour=3),
+    }
+    CELERY_BEAT_SCHEDULE["mobile-purge-idempotency-records"] = {
+        "task": "mobile_api.purge_idempotency_records",
+        "schedule": crontab(minute=20, hour=3),
+    }
+    CELERY_BEAT_SCHEDULE["mobile-purge-notification-deliveries"] = {
+        "task": "mobile_api.purge_notification_deliveries",
+        "schedule": crontab(minute=30, hour=3),
+    }
+    CELERY_BEAT_SCHEDULE["mobile-process-pending-notifications"] = {
+        "task": "mobile_api.process_pending_notifications",
+        "schedule": crontab(minute="*"),
+    }
+
 # Allow same-origin iframe rendering so in-app media previews (PDF/image) can load.
 X_FRAME_OPTIONS = "SAMEORIGIN"
 
 ATTACHMENT_ACCESS_TOKEN_MAX_AGE_SECONDS = os.getenv("ATTACHMENT_ACCESS_TOKEN_MAX_AGE_SECONDS", "3600")
+
+MOBILE_API_ENABLED = _env_bool("MOBILE_API_ENABLED", False)
+KEYCLOAK_AUTH_ENABLED = _env_bool("KEYCLOAK_AUTH_ENABLED", False)
+KEYCLOAK_BASE_URL = str(os.getenv("KEYCLOAK_BASE_URL", "http://keycloak:8080/idp")).strip()
+KEYCLOAK_PUBLIC_BASE_URL = str(os.getenv("KEYCLOAK_PUBLIC_BASE_URL", "")).strip()
+KEYCLOAK_REALM = str(os.getenv("KEYCLOAK_REALM", "taskhub")).strip()
+KEYCLOAK_IOS_CLIENT_ID = str(os.getenv("KEYCLOAK_IOS_CLIENT_ID", "taskhub-mobile")).strip()
+KEYCLOAK_REQUIRED_AUDIENCE = str(os.getenv("KEYCLOAK_REQUIRED_AUDIENCE", "taskhub-api")).strip()
+KEYCLOAK_ALLOWED_ALGS = str(os.getenv("KEYCLOAK_ALLOWED_ALGS", "RS256")).strip()
+KEYCLOAK_JWKS_SOFT_TTL_SECONDS = int(os.getenv("KEYCLOAK_JWKS_SOFT_TTL_SECONDS", "300"))
+KEYCLOAK_JWKS_HARD_TTL_SECONDS = int(os.getenv("KEYCLOAK_JWKS_HARD_TTL_SECONDS", "3600"))
+KEYCLOAK_JWKS_FETCH_TIMEOUT_SECONDS = int(os.getenv("KEYCLOAK_JWKS_FETCH_TIMEOUT_SECONDS", "3"))
+KEYCLOAK_ALLOWED_PUBLIC_HOSTS = _env_csv("KEYCLOAK_ALLOWED_PUBLIC_HOSTS", "")
+MOBILE_TOKEN_CLOCK_SKEW_SECONDS = int(os.getenv("MOBILE_TOKEN_CLOCK_SKEW_SECONDS", "60"))
+MOBILE_SYNC_MAX_PAGE_SIZE = int(os.getenv("MOBILE_SYNC_MAX_PAGE_SIZE", "500"))
+MOBILE_EVENT_RETENTION_DAYS = int(os.getenv("MOBILE_EVENT_RETENTION_DAYS", "30"))
+MOBILE_IDEMPOTENCY_TTL_HOURS = int(os.getenv("MOBILE_IDEMPOTENCY_TTL_HOURS", "24"))
+MOBILE_NOTIFICATION_DELIVERY_RETENTION_DAYS = int(
+    os.getenv("MOBILE_NOTIFICATION_DELIVERY_RETENTION_DAYS", "30")
+)
+APNS_ENABLED = _env_bool("APNS_ENABLED", False)
+APNS_KEY_ID = str(os.getenv("APNS_KEY_ID", "")).strip()
+APNS_TEAM_ID = str(os.getenv("APNS_TEAM_ID", "")).strip()
+APNS_BUNDLE_ID = str(os.getenv("APNS_BUNDLE_ID", "")).strip()
+APNS_PRIVATE_KEY_PATH = str(os.getenv("APNS_PRIVATE_KEY_PATH", "")).strip()
+APNS_PRIVATE_KEY_B64 = str(os.getenv("APNS_PRIVATE_KEY_B64", "")).strip()
+APNS_USE_SANDBOX = _env_bool("APNS_USE_SANDBOX", True)
+APNS_PROVIDER = str(os.getenv("APNS_PROVIDER", "mock")).strip().lower()
+MOBILE_NOTIFICATION_MAX_ATTEMPTS = int(os.getenv("MOBILE_NOTIFICATION_MAX_ATTEMPTS", "5"))
+MOBILE_NOTIFICATION_LEASE_SECONDS = int(os.getenv("MOBILE_NOTIFICATION_LEASE_SECONDS", "60"))
+MOBILE_NOTIFICATION_RETRY_BASE_SECONDS = int(os.getenv("MOBILE_NOTIFICATION_RETRY_BASE_SECONDS", "30"))
+
+if REDIS_URL := str(os.getenv("REDIS_URL", "")).strip():
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "taskhub-default",
+        }
+    }
 
 if not DEBUG:
     SECURE_CONTENT_TYPE_NOSNIFF = True

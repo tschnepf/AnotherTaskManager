@@ -222,7 +222,15 @@ export async function createProject(token, name, area = 'work') {
   })
 }
 
-export async function quickAddTask(token, title, area = 'work', projectId = '', priority = null) {
+export async function quickAddTask(
+  token,
+  title,
+  area = 'work',
+  projectId = '',
+  priority = null,
+  dueAt = null,
+  recurrence = 'none'
+) {
   const body = { title, area, status: 'inbox' }
   if (projectId) {
     body.project = projectId
@@ -230,6 +238,10 @@ export async function quickAddTask(token, title, area = 'work', projectId = '', 
   if (priority !== null) {
     body.priority = priority
   }
+  if (dueAt) {
+    body.due_at = dueAt
+  }
+  body.recurrence = recurrence || 'none'
   return request('/tasks/', {
     method: 'POST',
     token,

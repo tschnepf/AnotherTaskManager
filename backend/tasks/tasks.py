@@ -2,9 +2,10 @@ import os
 from datetime import timedelta
 
 from celery import shared_task
+from django.db import transaction
 from django.utils import timezone
 
-from tasks.models import Task
+from tasks.models import Task, TaskChangeEvent
 
 
 def _archive_after_days() -> int:
@@ -28,11 +29,30 @@ def archive_completed_tasks(organization_id: str | None = None):
     if organization_id:
         queryset = queryset.filter(organization_id=organization_id)
 
-    archived_count = queryset.update(
-        status=Task.Status.ARCHIVED,
-        completed_at=None,
-        updated_at=timezone.now(),
-    )
+    archived_task_ids = list(queryset.values_list("id", flat=True))
+    archived_count = queryset.update(status=Task.Status.ARCHIVED, completed_at=None, updated_at=timezone.now())
+
+    if archived_task_ids:
+        org_ids_by_task = {
+            str(task_id): org_id
+            for task_id, org_id in Task.objects.filter(id__in=archived_task_ids).values_list("id", "organization_id")
+        }
+
+        def _emit_events():
+            TaskChangeEvent.objects.bulk_create(
+                [
+                    TaskChangeEvent(
+                        organization_id=org_ids_by_task.get(str(task_id)),
+                        event_type=TaskChangeEvent.EventType.ARCHIVED,
+                        task_id=task_id,
+                        payload_summary={"status": Task.Status.ARCHIVED},
+                    )
+                    for task_id in archived_task_ids
+                    if org_ids_by_task.get(str(task_id))
+                ]
+            )
+
+        transaction.on_commit(_emit_events)
     return {
         "status": "ok",
         "archived_count": archived_count,

@@ -1,5 +1,7 @@
+from django.db import transaction
 from rest_framework import serializers
 from django.db.models import Max
+from django.utils import timezone
 
 from core.models import User
 from tasks.attachments import (
@@ -9,6 +11,7 @@ from tasks.attachments import (
     path_matches_task,
 )
 from tasks.models import Project, Tag, Task
+from tasks.recurrence import next_due_at_for_completion
 from tasks.transitions import is_valid_transition
 
 
@@ -34,6 +37,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "status",
             "priority",
             "due_at",
+            "recurrence",
             "completed_at",
             "source_type",
             "source_link",
@@ -86,6 +90,20 @@ class TaskSerializer(serializers.ModelSerializer):
             invalid_tag = next((tag for tag in tags if tag.organization_id != org.id), None)
             if invalid_tag is not None:
                 raise serializers.ValidationError("all tags must belong to the same organization")
+
+        instance = self.instance
+        if "recurrence" in attrs:
+            recurrence = attrs.get("recurrence")
+        else:
+            recurrence = instance.recurrence if instance is not None else Task.Recurrence.NONE
+
+        if "due_at" in attrs:
+            due_at = attrs.get("due_at")
+        else:
+            due_at = instance.due_at if instance is not None else None
+
+        if recurrence != Task.Recurrence.NONE and due_at is None:
+            raise serializers.ValidationError({"due_at": "due_at is required for recurring tasks"})
 
         return attrs
 
@@ -160,21 +178,59 @@ class TaskSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         tags = validated_data.pop("tags", None)
         old_status = instance.status
+        status_changed_to_done = False
         for key, value in validated_data.items():
             setattr(instance, key, value)
 
         if "status" in validated_data:
             if validated_data["status"] == Task.Status.DONE and instance.completed_at is None:
-                from django.utils import timezone
-
                 instance.completed_at = timezone.now()
+                status_changed_to_done = old_status != Task.Status.DONE
             if old_status == Task.Status.DONE and validated_data["status"] != Task.Status.DONE:
                 instance.completed_at = None
 
-        instance.save()
-        if tags is not None:
-            instance.tags.set(tags)
+        with transaction.atomic():
+            instance.save()
+            if tags is not None:
+                instance.tags.set(tags)
+            if status_changed_to_done:
+                self._create_next_recurring_task(instance)
         return instance
+
+    def _create_next_recurring_task(self, instance):
+        if instance.recurrence == Task.Recurrence.NONE or instance.due_at is None:
+            return
+
+        completed_at = instance.completed_at or timezone.now()
+        next_due_at = next_due_at_for_completion(instance.due_at, instance.recurrence, completed_at)
+        if next_due_at is None:
+            return
+
+        next_position = (
+            Task.objects.filter(organization=instance.organization).aggregate(max_position=Max("position"))[
+                "max_position"
+            ]
+            or 0
+        ) + 1
+        next_task = Task.objects.create(
+            organization=instance.organization,
+            created_by_user=instance.created_by_user,
+            assigned_to_user=instance.assigned_to_user,
+            title=instance.title,
+            description=instance.description,
+            notes=instance.notes,
+            intent=instance.intent,
+            area=instance.area,
+            project=instance.project,
+            status=Task.Status.INBOX,
+            priority=instance.priority,
+            due_at=next_due_at,
+            recurrence=instance.recurrence,
+            source_type=Task.SourceType.SELF,
+            allow_cloud_processing=instance.allow_cloud_processing,
+            position=next_position,
+        )
+        next_task.tags.set(instance.tags.all())
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

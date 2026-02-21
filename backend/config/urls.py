@@ -7,6 +7,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("health/live", health_live),
     path("health/ready", health_ready),
+    path("api/mobile/v1/", include("mobile_api.urls")),
     path("", include("core.urls")),
     path("", include("tasks.urls")),
     path("", include("collaboration.urls")),

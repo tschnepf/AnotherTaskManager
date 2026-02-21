@@ -595,7 +595,7 @@ table {
 
 .tasks-table {
   table-layout: fixed;
-  min-width: 860px;
+  min-width: 1060px;
 }
 
 th,
@@ -796,6 +796,33 @@ td {
 .task-details-notes {
   min-height: 88px;
   resize: vertical;
+}
+
+.task-details-schedule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.task-details-field {
+  display: grid;
+  gap: 6px;
+}
+
+.task-details-field span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.task-details-field input,
+.task-details-field select {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 13px;
 }
 
 .task-attachment-dropzone {
@@ -1182,7 +1209,7 @@ td {
 
 .quick-add {
   display: grid;
-  grid-template-columns: 1fr 130px 130px 220px 110px;
+  grid-template-columns: 1fr 120px 120px 150px 130px 220px 100px;
   gap: 10px;
   padding: 16px 20px;
   border-bottom: 1px solid var(--line);
@@ -1195,7 +1222,14 @@ td {
   padding: 0;
   border: 0;
   background: transparent;
-  grid-template-columns: minmax(180px, 1fr) 110px 120px minmax(170px, 220px) 90px;
+  grid-template-columns:
+    minmax(170px, 1fr)
+    100px
+    110px
+    135px
+    115px
+    minmax(140px, 190px)
+    86px;
 }
 
 .quick-add-inline .error-text {
@@ -1612,6 +1646,13 @@ td {
   .quick-add-inline {
     flex: 1 1 100%;
     min-width: 0;
-    grid-template-columns: minmax(150px, 1fr) 100px 110px minmax(140px, 180px) 88px;
+    grid-template-columns:
+      minmax(150px, 1fr)
+      94px
+      104px
+      125px
+      105px
+      minmax(135px, 170px)
+      80px;
   }
 }

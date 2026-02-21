@@ -39,6 +39,13 @@ const PRIORITY_OPTIONS = [
   { value: 'medium', label: 'Medium' },
   { value: 'low', label: 'Low' },
 ]
+const RECURRENCE_OPTIONS = [
+  { value: 'none', label: 'One-time' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'yearly', label: 'Yearly' },
+]
 const PREVIEWABLE_IMAGE_EXTENSIONS = new Set([
   'png',
   'jpg',
@@ -346,6 +353,60 @@ function priorityLabelFromValue(priority) {
     return 'Medium'
   }
   return 'Low'
+}
+
+function dueAtFromDateInput(value) {
+  if (!value) {
+    return null
+  }
+  const [yearRaw, monthRaw, dayRaw] = String(value)
+    .split('-')
+    .map((part) => Number.parseInt(part, 10))
+  if (!yearRaw || !monthRaw || !dayRaw) {
+    return null
+  }
+  const localNoon = new Date(yearRaw, monthRaw - 1, dayRaw, 12, 0, 0, 0)
+  if (Number.isNaN(localNoon.getTime())) {
+    return null
+  }
+  return localNoon.toISOString()
+}
+
+function dateInputFromDueAt(value) {
+  if (!value) {
+    return ''
+  }
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return ''
+  }
+  const year = parsed.getFullYear()
+  const month = String(parsed.getMonth() + 1).padStart(2, '0')
+  const day = String(parsed.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function formatTaskDate(value) {
+  if (!value) {
+    return 'No date'
+  }
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return 'No date'
+  }
+  return parsed.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function recurrenceLabel(value) {
+  if (value === 'daily') return 'Daily'
+  if (value === 'weekly') return 'Weekly'
+  if (value === 'monthly') return 'Monthly'
+  if (value === 'yearly') return 'Yearly'
+  return 'One-time'
 }
 
 function formatAreaLabel(area) {
@@ -818,6 +879,8 @@ function QuickAdd({ token, projects, onTaskCreated, onProjectCreated, inline = f
   const [title, setTitle] = useState('')
   const [area, setArea] = useState('work')
   const [priorityLevel, setPriorityLevel] = useState('')
+  const [dueDateInput, setDueDateInput] = useState('')
+  const [recurrence, setRecurrence] = useState('none')
   const [projectQuery, setProjectQuery] = useState('')
   const [projectId, setProjectId] = useState('')
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
@@ -966,6 +1029,10 @@ function QuickAdd({ token, projects, onTaskCreated, onProjectCreated, inline = f
     if (!title.trim()) {
       return
     }
+    if (recurrence !== 'none' && !dueDateInput) {
+      setError('Recurring tasks require a date.')
+      return
+    }
     let resolvedProjectId = projectId
     if (!resolvedProjectId && projectQuery.trim()) {
       if (exactMatch) {
@@ -985,10 +1052,14 @@ function QuickAdd({ token, projects, onTaskCreated, onProjectCreated, inline = f
         title.trim(),
         area,
         resolvedProjectId,
-        priorityValueFromLevel(priorityLevel)
+        priorityValueFromLevel(priorityLevel),
+        dueAtFromDateInput(dueDateInput),
+        recurrence
       )
       setTitle('')
       setPriorityLevel('')
+      setDueDateInput('')
+      setRecurrence('none')
       onTaskCreated()
     } catch (e) {
       setError(e.message)
@@ -1015,6 +1086,19 @@ function QuickAdd({ token, projects, onTaskCreated, onProjectCreated, inline = f
       >
         {PRIORITY_OPTIONS.map((option) => (
           <option key={option.value || 'none'} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <input
+        type="date"
+        value={dueDateInput}
+        onChange={(e) => setDueDateInput(e.target.value)}
+        aria-label="Task date"
+      />
+      <select value={recurrence} onChange={(e) => setRecurrence(e.target.value)} aria-label="Recurrence">
+        {RECURRENCE_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
             {option.label}
           </option>
         ))}
@@ -1661,6 +1745,8 @@ function Dashboard({ token, onLogout }) {
   const [dropTarget, setDropTarget] = useState(null)
   const [expandedTaskId, setExpandedTaskId] = useState('')
   const [detailsNotes, setDetailsNotes] = useState('')
+  const [detailsDueDate, setDetailsDueDate] = useState('')
+  const [detailsRecurrence, setDetailsRecurrence] = useState('none')
   const [detailsAttachments, setDetailsAttachments] = useState([])
   const [isAttachmentDragOver, setIsAttachmentDragOver] = useState(false)
   const [attachmentPreview, setAttachmentPreview] = useState(null)
@@ -1744,6 +1830,8 @@ function Dashboard({ token, onLogout }) {
     if (!tasks.some((task) => task.id === expandedTaskId)) {
       setExpandedTaskId('')
       setDetailsNotes('')
+      setDetailsDueDate('')
+      setDetailsRecurrence('none')
       setDetailsAttachments([])
       setIsAttachmentDragOver(false)
       setAttachmentPreview(null)
@@ -2228,6 +2316,8 @@ function Dashboard({ token, onLogout }) {
     if (expandedTaskId === task.id) {
       setExpandedTaskId('')
       setDetailsNotes('')
+      setDetailsDueDate('')
+      setDetailsRecurrence('none')
       setDetailsAttachments([])
       setIsAttachmentDragOver(false)
       setAttachmentPreview(null)
@@ -2235,6 +2325,8 @@ function Dashboard({ token, onLogout }) {
     }
     setExpandedTaskId(task.id)
     setDetailsNotes(task.notes || '')
+    setDetailsDueDate(dateInputFromDueAt(task.due_at))
+    setDetailsRecurrence(task.recurrence || 'none')
     setDetailsAttachments(normalizeAttachments(task.attachments))
     setIsAttachmentDragOver(false)
     setError('')
@@ -2345,6 +2437,11 @@ function Dashboard({ token, onLogout }) {
   }
 
   async function handleSaveTaskDetails(task) {
+    if (detailsRecurrence !== 'none' && !detailsDueDate) {
+      setError('Recurring tasks require a date.')
+      return
+    }
+
     setError('')
     setUpdatingTaskIds((current) => {
       const next = new Set(current)
@@ -2355,14 +2452,21 @@ function Dashboard({ token, onLogout }) {
       const payload = {
         notes: detailsNotes,
         attachments: detailsAttachments,
+        due_at: detailsDueDate ? dueAtFromDateInput(detailsDueDate) : null,
+        recurrence: detailsRecurrence || 'none',
       }
-      await updateTask(token, task.id, payload)
+      const updatedTask = await updateTask(token, task.id, payload)
+      const normalizedUpdatedAttachments = normalizeAttachments(updatedTask.attachments)
+      setDetailsAttachments(normalizedUpdatedAttachments)
+      setDetailsDueDate(dateInputFromDueAt(updatedTask.due_at))
+      setDetailsRecurrence(updatedTask.recurrence || 'none')
       setTasks((current) =>
         current.map((currentTask) =>
           currentTask.id === task.id
             ? {
                 ...currentTask,
-                ...payload,
+                ...updatedTask,
+                attachments: normalizedUpdatedAttachments,
               }
             : currentTask
         )
@@ -2475,6 +2579,34 @@ function Dashboard({ token, onLogout }) {
             onChange={(e) => setDetailsNotes(e.target.value)}
             placeholder="Add notes, email context, or other details."
           />
+        </div>
+        <div className="task-details-section">
+          <label>Schedule</label>
+          <div className="task-details-schedule-grid">
+            <label className="task-details-field">
+              <span>Date</span>
+              <input
+                type="date"
+                value={detailsDueDate}
+                disabled={updatingTaskIds.has(task.id)}
+                onChange={(e) => setDetailsDueDate(e.target.value)}
+              />
+            </label>
+            <label className="task-details-field">
+              <span>Repeat</span>
+              <select
+                value={detailsRecurrence}
+                disabled={updatingTaskIds.has(task.id)}
+                onChange={(e) => setDetailsRecurrence(e.target.value)}
+              >
+                {RECURRENCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
         <div className="task-details-section">
           <label>Attachments</label>
@@ -2835,8 +2967,10 @@ function Dashboard({ token, onLogout }) {
                         {task.project ? ` • ${projectNameById[task.project] || 'Unknown project'}` : ''}
                       </p>
                       <p className="mobile-task-submeta">
-                        {priorityLabelFromValue(task.priority)} •{' '}
-                        {formatCreatedTimestamp(task.created_at || task.created)}
+                        {priorityLabelFromValue(task.priority)} • {formatTaskDate(task.due_at)}
+                        {task.recurrence && task.recurrence !== 'none'
+                          ? ` • ${recurrenceLabel(task.recurrence)}`
+                          : ''}
                       </p>
                     </div>
                     <div className="mobile-task-actions">
@@ -2900,6 +3034,8 @@ function Dashboard({ token, onLogout }) {
                     <th>Area</th>
                     <th>Project</th>
                     <th>Priority</th>
+                    <th>Date</th>
+                    <th>Repeat</th>
                     <th>Created</th>
                     <th className="actions-header"></th>
                   </tr>
@@ -2999,6 +3135,12 @@ function Dashboard({ token, onLogout }) {
                           </div>
                         </td>
                         <td>
+                          <div className="task-cell-content">{formatTaskDate(task.due_at)}</div>
+                        </td>
+                        <td>
+                          <div className="task-cell-content">{recurrenceLabel(task.recurrence)}</div>
+                        </td>
+                        <td>
                           <div className="task-cell-content">
                             {formatCreatedTimestamp(task.created_at || task.created)}
                           </div>
@@ -3026,7 +3168,7 @@ function Dashboard({ token, onLogout }) {
                       </tr>
                       {expandedTaskId === task.id ? (
                         <tr className={task.status === 'done' ? 'task-details-row task-row-done' : 'task-details-row'}>
-                          <td colSpan={9} className="task-details-cell">
+                          <td colSpan={11} className="task-details-cell">
                             {renderTaskDetailsPanel(task)}
                           </td>
                         </tr>
@@ -3035,7 +3177,7 @@ function Dashboard({ token, onLogout }) {
                   ))}
                   {!filteredTasks.length ? (
                     <tr>
-                      <td colSpan={9}>No tasks in this view.</td>
+                      <td colSpan={11}>No tasks in this view.</td>
                     </tr>
                   ) : null}
                 </tbody>

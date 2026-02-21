@@ -32,7 +32,7 @@ from tasks.email_ingest import (
     parse_eml,
 )
 from tasks.email_capture_service import EmailIngestError, ingest_raw_email_for_org
-from tasks.models import Project, Tag, Task
+from tasks.models import Project, Tag, Task, TaskChangeEvent
 from tasks.serializers import ProjectSerializer, TagSerializer, TaskSerializer
 from tasks.transitions import is_valid_transition
 
@@ -70,10 +70,14 @@ class TaskViewSet(OrgScopedQuerysetMixin, viewsets.ModelViewSet):
         include_history = self.request.query_params.get("include_history") == "true"
         if getattr(self, "action", None) == "list" and not include_history:
             done_cutoff = timezone.now() - timedelta(days=1)
+            upcoming_cutoff = timezone.now() + timedelta(days=7)
             qs = qs.exclude(
                 Q(status=Task.Status.DONE) & (Q(completed_at__lt=done_cutoff) | Q(completed_at__isnull=True))
             )
             qs = qs.exclude(status=Task.Status.ARCHIVED)
+            qs = qs.exclude(
+                ~Q(status__in=[Task.Status.DONE, Task.Status.ARCHIVED]) & Q(due_at__gt=upcoming_cutoff)
+            )
 
         status_value = self.request.query_params.get("status")
         area = self.request.query_params.get("area")
@@ -279,6 +283,21 @@ class TaskViewSet(OrgScopedQuerysetMixin, viewsets.ModelViewSet):
                 for index, task_id in enumerate(ordered_ids, start=1)
             ]
             Task.objects.bulk_update(updates, ["position", "updated_at"])
+
+            def _emit_reorder_events():
+                TaskChangeEvent.objects.bulk_create(
+                    [
+                        TaskChangeEvent(
+                            organization=task.organization,
+                            event_type=TaskChangeEvent.EventType.UPDATED,
+                            task_id=task_id,
+                            payload_summary={"position": index, "reordered": True},
+                        )
+                        for index, task_id in enumerate(ordered_ids, start=1)
+                    ]
+                )
+
+            transaction.on_commit(_emit_reorder_events)
 
         task.refresh_from_db()
         return Response(self.get_serializer(task).data)
