@@ -13,18 +13,37 @@ bash tools/keycloak/validate-realm-export.sh tools/keycloak/realm-export/taskhub
 7. Validate OIDC public endpoint reachability using `docs/oidc-public-endpoints-runbook.md`.
 
 ## Migration + onboarding
-1. Prepare CSV of users for IdP migration with columns `email,first_name,last_name,enabled`.
-2. Run migration dry-run report:
+1. Export existing Django users to CSV:
 ```bash
-bash tools/keycloak/migrate-users.sh /path/to/users.csv --report /tmp/keycloak-migrate-report.json
+bash tools/keycloak/export-django-users.sh /tmp/taskhub-users.csv
 ```
-3. After successful migration, backfill identity links (dry-run first):
+2. Run migration dry-run report (creates users in Keycloak when `--apply` is added):
 ```bash
-python tools/keycloak/backfill_oidc_identity.py \
-  --csv /path/to/identity-links.csv \
-  --issuer https://tasks.example.com/idp/realms/taskhub
+bash tools/keycloak/migrate-users.sh /tmp/taskhub-users.csv --report /tmp/keycloak-migrate-report.json
 ```
-4. Apply identity backfill:
+3. Apply migration (recommended: temporary bootstrap password):
+```bash
+bash tools/keycloak/migrate-users.sh /tmp/taskhub-users.csv \
+  --apply \
+  --set-password \
+  --default-password 'REPLACE_WITH_TEMP_PASSWORD' \
+  --temporary-password \
+  --report /tmp/keycloak-migrate-apply-report.json
+```
+4. Link Keycloak subjects to existing Django users by matching email (dry-run first):
+```bash
+bash tools/keycloak/link-identities-by-email.sh \
+  --issuer https://tasks.example.com/idp/realms/taskhub \
+  --report /tmp/oidc-link-dry-run.json
+```
+5. Apply identity linking:
+```bash
+bash tools/keycloak/link-identities-by-email.sh \
+  --issuer https://tasks.example.com/idp/realms/taskhub \
+  --apply \
+  --report /tmp/oidc-link-apply-report.json
+```
+6. Optional advanced linking from curated mappings:
 ```bash
 python tools/keycloak/backfill_oidc_identity.py \
   --csv /path/to/identity-links.csv \
@@ -32,6 +51,9 @@ python tools/keycloak/backfill_oidc_identity.py \
   --apply \
   --report /tmp/oidc-backfill-report.json
 ```
+7. Validate a migrated user can sign into Keycloak (mobile flow), then access:
+   - `GET /api/mobile/v1/session` (200)
+   - `GET /api/mobile/v1/tasks` (200 with bearer token)
 
 ## Key rotation
 1. Add a new active signing key in Keycloak; keep the previous key available during overlap.

@@ -37,7 +37,7 @@ services:
     image: quay.io/keycloak/keycloak:26.1
     container_name: taskhub-keycloak
     restart: unless-stopped
-    command: ["start"]
+    command: ["start", "--import-realm"]
     env_file:
       - .env.unraid.production
     environment:
@@ -47,11 +47,14 @@ services:
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HTTP_ENABLED: "true"
       KC_HTTP_RELATIVE_PATH: /idp
       KC_PROXY_HEADERS: xforwarded
       KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-tasks.example.com}
       KC_HOSTNAME_STRICT: ${KEYCLOAK_HOSTNAME_STRICT:-true}
       KC_HEALTH_ENABLED: true
+    volumes:
+      - /mnt/user/appdata/AnotherTaskManager/tools/keycloak/realm-export:/opt/keycloak/data/import:ro
     depends_on:
       keycloak-db:
         condition: service_healthy
