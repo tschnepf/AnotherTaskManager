@@ -1,6 +1,9 @@
 {
   "realm": "taskhub",
   "enabled": true,
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": true,
+  "loginWithEmailAllowed": true,
   "sslRequired": "none",
   "clients": [
     {

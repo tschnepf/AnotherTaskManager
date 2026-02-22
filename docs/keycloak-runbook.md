@@ -33,6 +33,26 @@ docker exec -it taskhub-api python backend/manage.py bootstrap_idp_admin \
 3. Use `/login` web page -> `Continue with TaskHub ID` (OIDC).
 4. iOS login uses same IdP credentials.
 
+## Fresh deployment bootstrap (web-only, no CLI user creation)
+1. Enable in environment:
+   - `KEYCLOAK_AUTH_ENABLED=true`
+   - `MOBILE_API_ENABLED=true`
+   - `KEYCLOAK_WEB_AUTH_ENABLED=true`
+   - `KEYCLOAK_WEB_CLIENT_ID=taskhub-web`
+   - `KEYCLOAK_WEB_SIGNUP_ENABLED=true`
+   - `KEYCLOAK_AUTO_PROVISION_USERS=true`
+   - `KEYCLOAK_AUTO_PROVISION_ORGANIZATION=true`
+2. Ensure realm registration is enabled (in realm export this is now default):
+   - `registrationAllowed=true`
+   - `registrationEmailAsUsername=true`
+3. Open app `/login` and click `Create account`.
+4. Complete Keycloak signup page.
+5. On first successful OIDC callback:
+   - Keycloak user exists
+   - Django user is auto-created and linked
+   - first auto-provisioned user is app superuser/staff + owner
+6. Use same credentials for iOS and web.
+
 ## Migration + onboarding
 1. Export existing Django users to CSV:
 ```bash

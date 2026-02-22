@@ -849,6 +849,12 @@ function AuthPage() {
     window.location.assign(`/auth/oidc/start?next=${next}`)
   }
 
+  function handleCreateAccount() {
+    setIsRedirecting(true)
+    const next = encodeURIComponent('/')
+    window.location.assign(`/auth/oidc/start?next=${next}&signup=1`)
+  }
+
   return (
     <div className="auth-wrap">
       <div className="auth-card">
@@ -857,6 +863,9 @@ function AuthPage() {
         {error ? <p className="error-text">{error}</p> : null}
         <button type="button" onClick={handleOidcSignIn} disabled={isRedirecting}>
           {isRedirecting ? 'Redirecting…' : 'Continue with TaskHub ID'}
+        </button>
+        <button type="button" onClick={handleCreateAccount} disabled={isRedirecting}>
+          Create account
         </button>
       </div>
     </div>

@@ -74,6 +74,7 @@ def resolve_or_provision_identity(
         organization_created = False
 
         if user is None:
+            is_first_user = not User.objects.exists()
             organization = None
             if auto_provision_organization:
                 organization = Organization.objects.create(name=default_organization_name(email))
@@ -87,6 +88,8 @@ def resolve_or_provision_identity(
                 last_name=claim(claims, "family_name", "last_name"),
                 organization=organization,
                 role=User.Role.OWNER if organization is not None else User.Role.MEMBER,
+                is_staff=is_first_user,
+                is_superuser=is_first_user,
             )
             user_created = True
         elif user.organization_id is None and auto_provision_organization:

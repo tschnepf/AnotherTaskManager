@@ -53,6 +53,23 @@ def test_web_oidc_start_redirect_sets_signed_flow_cookie():
     KEYCLOAK_WEB_CLIENT_ID="taskhub-web",
     KEYCLOAK_PUBLIC_BASE_URL="https://tasks.example.com",
     KEYCLOAK_REALM="taskhub",
+    KEYCLOAK_WEB_SIGNUP_ENABLED=True,
+)
+def test_web_oidc_start_signup_sets_kc_action_register():
+    client = APIClient()
+    response = client.get("/auth/oidc/start?signup=1")
+    assert response.status_code == 302
+    parsed = urlparse(response["Location"])
+    query = parse_qs(parsed.query)
+    assert query["kc_action"][0] == "register"
+
+
+@pytest.mark.django_db
+@override_settings(
+    KEYCLOAK_WEB_AUTH_ENABLED=True,
+    KEYCLOAK_WEB_CLIENT_ID="taskhub-web",
+    KEYCLOAK_PUBLIC_BASE_URL="https://tasks.example.com",
+    KEYCLOAK_REALM="taskhub",
     KEYCLOAK_REQUIRED_AUDIENCE="taskhub-api",
     KEYCLOAK_AUTO_PROVISION_USERS=True,
     KEYCLOAK_AUTO_PROVISION_ORGANIZATION=True,
@@ -97,6 +114,8 @@ def test_web_oidc_callback_creates_session_and_identity(monkeypatch):
         subject="web-sub-1",
     )
     assert identity.user_id == user.id
+    assert user.is_superuser is True
+    assert user.is_staff is True
 
 
 @pytest.mark.django_db

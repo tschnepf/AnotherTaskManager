@@ -223,6 +223,10 @@ def _oidc_post_login_redirect() -> str:
     return value if value.startswith("/") else "/"
 
 
+def _oidc_signup_enabled() -> bool:
+    return bool(getattr(settings, "KEYCLOAK_WEB_SIGNUP_ENABLED", False))
+
+
 def _oidc_error_redirect(message: str):
     safe = message.strip() or "oidc_login_failed"
     return redirect(f"/login?error={safe}")
@@ -261,6 +265,9 @@ def oidc_login_start_view(request):
     audience = str(getattr(settings, "KEYCLOAK_REQUIRED_AUDIENCE", "")).strip()
     if audience:
         params["audience"] = audience
+    signup = str(request.query_params.get("signup") or "").strip().lower() in {"1", "true", "yes"}
+    if signup and _oidc_signup_enabled():
+        params["kc_action"] = "register"
 
     flow_payload = {
         "state": state,
