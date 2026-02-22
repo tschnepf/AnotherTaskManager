@@ -4,6 +4,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import Organization, User
+from django.utils.dateparse import parse_datetime
 
 
 @pytest.mark.django_db(transaction=True)
@@ -53,9 +54,17 @@ def test_mobile_session_tasks_idempotency_and_delta_sync():
     assert list_res.data
     assert {"id", "title", "is_completed", "due_at"}.issubset(set(list_res.data[0].keys()))
     assert isinstance(list_res.data[0]["is_completed"], bool)
+    if list_res.data[0]["due_at"]:
+        assert "." not in list_res.data[0]["due_at"]
+        assert list_res.data[0]["due_at"].endswith("Z")
+        assert parse_datetime(list_res.data[0]["due_at"]) is not None
 
     delta_res = client.get("/api/mobile/v1/sync/delta", {"cursor": "0", "limit": "100"})
     assert delta_res.status_code == 200
     assert isinstance(delta_res.data["events"], list)
     assert any(item["task_id"] == first_task_id for item in delta_res.data["events"])
     assert isinstance(delta_res.data["next_cursor"], str)
+    if delta_res.data["events"]:
+        assert "." not in delta_res.data["events"][0]["occurred_at"]
+        assert delta_res.data["events"][0]["occurred_at"].endswith("Z")
+        assert parse_datetime(delta_res.data["events"][0]["occurred_at"]) is not None

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import timezone as dt_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.conf import settings
+from django.utils import timezone
 from rest_framework import serializers
 
 from mobile_api.models import (
@@ -13,6 +15,19 @@ from mobile_api.models import (
 )
 from tasks.models import Task
 from tasks.serializers import TaskSerializer
+
+
+class MobileDateTimeField(serializers.DateTimeField):
+    """Stable RFC3339 timestamps for iOS JSONDecoder.iso8601 compatibility."""
+
+    def to_representation(self, value):
+        if value is None:
+            return None
+        dt = value
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, dt_timezone.utc)
+        dt = dt.astimezone(dt_timezone.utc).replace(microsecond=0)
+        return dt.isoformat().replace("+00:00", "Z")
 
 
 class MobileMetaSerializer(serializers.Serializer):
@@ -185,6 +200,7 @@ class MobileTaskCreateSerializer(TaskSerializer):
 
 class MobileTaskSerializer(serializers.ModelSerializer):
     is_completed = serializers.SerializerMethodField()
+    due_at = MobileDateTimeField(allow_null=True, required=False)
 
     class Meta:
         model = Task
@@ -195,6 +211,9 @@ class MobileTaskSerializer(serializers.ModelSerializer):
 
 
 class WidgetTaskSerializer(serializers.ModelSerializer):
+    due_at = MobileDateTimeField(allow_null=True, required=False)
+    updated_at = MobileDateTimeField()
+
     class Meta:
         model = Task
         fields = ["id", "title", "status", "due_at", "priority", "area", "updated_at"]

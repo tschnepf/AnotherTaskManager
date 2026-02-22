@@ -1,5 +1,6 @@
 import pytest
 from django.test import override_settings
+from django.utils.dateparse import parse_datetime
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -35,4 +36,7 @@ def test_intents_idempotency_and_widget_snapshot():
     snapshot = client.get("/api/mobile/v1/widget/snapshot")
     assert snapshot.status_code == 200
     assert "generated_at" in snapshot.data
+    assert "." not in snapshot.data["generated_at"]
+    assert snapshot.data["generated_at"].endswith("Z")
+    assert parse_datetime(snapshot.data["generated_at"]) is not None
     assert isinstance(snapshot.data["tasks"], list)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timezone as dt_timezone
 from typing import Any
 
 from django.conf import settings
@@ -55,6 +56,16 @@ class MobileEnabledAPIView(APIView):
         if org is None:
             raise Http404
         return org
+
+
+def _mobile_datetime(value) -> str | None:
+    if value is None:
+        return None
+    dt = value
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, dt_timezone.utc)
+    dt = dt.astimezone(dt_timezone.utc).replace(microsecond=0)
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 def _required_scopes() -> list[str]:
@@ -232,7 +243,7 @@ class MobileDeltaSyncView(MobileEnabledAPIView):
                     "event_type": event.event_type,
                     "task_id": str(event.task_id) if event.task_id else None,
                     "payload_summary": event.payload_summary,
-                    "occurred_at": event.occurred_at,
+                    "occurred_at": _mobile_datetime(event.occurred_at),
                     "tombstone": event.event_type == TaskChangeEvent.EventType.DELETED,
                 }
             )
@@ -377,7 +388,7 @@ class WidgetSnapshotView(MobileEnabledAPIView):
         serializer = WidgetTaskSerializer(queryset, many=True)
         return Response(
             {
-                "generated_at": timezone.now(),
+                "generated_at": _mobile_datetime(timezone.now()),
                 "tasks": serializer.data,
             }
         )
