@@ -65,6 +65,16 @@ python tools/keycloak/backfill_oidc_identity.py \
 2. Temporarily disable mobile traffic by setting `MOBILE_API_ENABLED=false` if auth incident is unresolved.
 3. Preserve legacy web auth while mobile auth is degraded.
 
+## JIT provisioning (recommended for fresh installs)
+1. Enable automatic first-login provisioning:
+   - `KEYCLOAK_AUTO_PROVISION_USERS=true`
+   - `KEYCLOAK_AUTO_PROVISION_ORGANIZATION=true`
+2. With both enabled, successful OIDC login automatically:
+   - creates/links local Django user by token email claim
+   - creates an organization for brand-new users
+   - creates `OIDCIdentity` issuer/subject mapping
+3. Keep `KEYCLOAK_AUTO_PROVISION_USERS=false` if you require explicit admin onboarding only.
+
 ## Rollback
 1. Set `KEYCLOAK_AUTH_ENABLED=false` and `MOBILE_API_ENABLED=false`.
 2. Keep `/auth/*` cookie-based web auth active.

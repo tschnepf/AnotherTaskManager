@@ -96,3 +96,76 @@ def test_onboarding_required_when_identity_missing(monkeypatch):
     res = client.get("/api/mobile/v1/session")
     assert res.status_code == 403
     assert res.data["error"]["code"] == "onboarding_required"
+
+
+@pytest.mark.django_db
+@override_settings(
+    MOBILE_API_ENABLED=True,
+    KEYCLOAK_AUTH_ENABLED=True,
+    KEYCLOAK_PUBLIC_BASE_URL="https://tasks.example.com",
+    KEYCLOAK_REALM="taskhub",
+    KEYCLOAK_REQUIRED_AUDIENCE="taskhub-api",
+    KEYCLOAK_AUTO_PROVISION_USERS=True,
+    KEYCLOAK_AUTO_PROVISION_ORGANIZATION=True,
+)
+def test_auto_provision_creates_user_org_and_identity(monkeypatch):
+    _patch_jwt_happy_path(
+        monkeypatch,
+        {
+            "sub": "new-sub",
+            "scope": "mobile.read mobile.sync",
+            "email": "new-user@example.com",
+            "given_name": "New",
+            "family_name": "User",
+        },
+    )
+
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION="Bearer fake-token")
+    res = client.get("/api/mobile/v1/session")
+    assert res.status_code == 200
+
+    user = User.objects.get(email="new-user@example.com")
+    assert user.organization_id is not None
+    assert user.role == User.Role.OWNER
+    identity = OIDCIdentity.objects.get(
+        issuer="https://tasks.example.com/idp/realms/taskhub",
+        subject="new-sub",
+    )
+    assert identity.user_id == user.id
+
+
+@pytest.mark.django_db
+@override_settings(
+    MOBILE_API_ENABLED=True,
+    KEYCLOAK_AUTH_ENABLED=True,
+    KEYCLOAK_PUBLIC_BASE_URL="https://tasks.example.com",
+    KEYCLOAK_REALM="taskhub",
+    KEYCLOAK_REQUIRED_AUDIENCE="taskhub-api",
+    KEYCLOAK_AUTO_PROVISION_USERS=True,
+    KEYCLOAK_AUTO_PROVISION_ORGANIZATION=True,
+)
+def test_auto_provision_links_existing_user_by_email(monkeypatch):
+    org = Organization.objects.create(name="Existing Org")
+    user = User.objects.create_user(email="existing@example.com", password="StrongPass123!", organization=org)
+
+    _patch_jwt_happy_path(
+        monkeypatch,
+        {
+            "sub": "existing-sub",
+            "scope": "mobile.read mobile.sync",
+            "email": "existing@example.com",
+        },
+    )
+
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION="Bearer fake-token")
+    res = client.get("/api/mobile/v1/session")
+    assert res.status_code == 200
+    assert res.data["organization_id"] == str(org.id)
+
+    identity = OIDCIdentity.objects.get(
+        issuer="https://tasks.example.com/idp/realms/taskhub",
+        subject="existing-sub",
+    )
+    assert identity.user_id == user.id
