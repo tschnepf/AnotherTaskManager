@@ -79,6 +79,7 @@ def test_web_oidc_start_redirect_sets_signed_flow_cookie():
     query = parse_qs(parsed.query)
     assert query["client_id"][0] == "taskhub-web"
     assert query["redirect_uri"][0].endswith("/auth/oidc/callback")
+    assert query["scope"][0] == "openid"
     assert query["code_challenge_method"][0] == "S256"
 
 
@@ -97,6 +98,7 @@ def test_web_oidc_start_signup_sets_kc_action_register():
     assert response.status_code == 302
     parsed = urlparse(response["Location"])
     query = parse_qs(parsed.query)
+    assert query["scope"][0] == "openid"
     assert query["kc_action"][0] == "register"
 
 

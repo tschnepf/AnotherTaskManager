@@ -212,7 +212,7 @@ def _oidc_web_client_id() -> str:
 
 
 def _oidc_web_scopes() -> str:
-    raw = str(getattr(settings, "KEYCLOAK_WEB_SCOPES", "openid profile email")).strip()
+    raw = str(getattr(settings, "KEYCLOAK_WEB_SCOPES", "openid")).strip()
     scopes = [piece.strip() for piece in raw.split() if piece.strip()]
     if "openid" not in scopes:
         scopes.insert(0, "openid")
@@ -312,6 +312,8 @@ def _ensure_keycloak_web_client(
     callback_uri: str,
     web_origin: str,
 ) -> None:
+    default_client_scopes = ["profile", "email", "roles"]
+    optional_client_scopes = ["offline_access"]
     existing = _keycloak_admin_get_client(
         base_url=base_url,
         realm=realm,
@@ -332,6 +334,8 @@ def _ensure_keycloak_web_client(
                 "serviceAccountsEnabled": False,
                 "redirectUris": [callback_uri],
                 "webOrigins": [web_origin],
+                "defaultClientScopes": default_client_scopes,
+                "optionalClientScopes": optional_client_scopes,
                 "attributes": {
                     "pkce.code.challenge.method": "S256",
                 },
@@ -356,6 +360,20 @@ def _ensure_keycloak_web_client(
     web_origins = _dedupe([*(existing.get("webOrigins") or []), web_origin])
     if web_origins != list(existing.get("webOrigins") or []):
         existing["webOrigins"] = web_origins
+        changed = True
+
+    resolved_default_scopes = _dedupe([*(existing.get("defaultClientScopes") or []), *default_client_scopes])
+    if resolved_default_scopes != list(existing.get("defaultClientScopes") or []):
+        existing["defaultClientScopes"] = resolved_default_scopes
+        changed = True
+
+    resolved_optional_scopes = _dedupe([*(existing.get("optionalClientScopes") or []), *optional_client_scopes])
+    if resolved_optional_scopes != list(existing.get("optionalClientScopes") or []):
+        existing["optionalClientScopes"] = resolved_optional_scopes
+        changed = True
+
+    if str(existing.get("protocol") or "").strip() != "openid-connect":
+        existing["protocol"] = "openid-connect"
         changed = True
 
     if existing.get("publicClient") is not True:
