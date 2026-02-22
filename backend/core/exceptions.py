@@ -38,6 +38,21 @@ def _mobile_error_message(response) -> str:
         message = data.get("message")
         if message:
             return str(message)
+        for key, value in data.items():
+            if key in {"detail", "message", "error", "request_id"}:
+                continue
+            if isinstance(value, list) and value:
+                return f"{key}: {value[0]}"
+            if isinstance(value, dict):
+                for nested_key, nested_value in value.items():
+                    if isinstance(nested_value, list) and nested_value:
+                        return f"{nested_key}: {nested_value[0]}"
+                    if nested_value:
+                        return f"{nested_key}: {nested_value}"
+            if value:
+                return f"{key}: {value}"
+    if isinstance(data, list) and data:
+        return str(data[0])
     return "Request failed"
 
 

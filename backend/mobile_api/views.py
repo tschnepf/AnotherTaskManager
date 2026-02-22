@@ -147,12 +147,18 @@ class MobileTaskListCreateView(MobileEnabledAPIView):
         return Response(serializer.data)
 
     def post(self, request):
+        body = dict(request.data)
+        body.setdefault("area", Task.Area.PERSONAL)
+
         def action() -> Response:
-            serializer = TaskSerializer(data=request.data, context={"request": request})
+            serializer = TaskSerializer(data=body, context={"request": request})
             serializer.is_valid(raise_exception=True)
             task = serializer.save()
             return Response(MobileTaskSerializer(task).data, status=status.HTTP_201_CREATED)
 
+        # Backward compatibility: older mobile clients may omit Idempotency-Key.
+        if not str(request.headers.get("Idempotency-Key") or "").strip():
+            return action()
         return with_idempotency(request, endpoint="POST:/api/mobile/v1/tasks", action=action)
 
 
@@ -354,6 +360,8 @@ class IntentCreateTaskView(MobileEnabledAPIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+        if not str(request.headers.get("Idempotency-Key") or "").strip():
+            return action()
         return with_idempotency(request, endpoint="POST:/api/mobile/v1/intents/create-task", action=action)
 
 
