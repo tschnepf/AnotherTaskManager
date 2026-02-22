@@ -1,19 +1,32 @@
 from __future__ import annotations
 
+from datetime import timezone as dt_timezone
+
 from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
+from django.utils import timezone
 
 from mobile_api.notifications import cancel_notifications_for_task, refresh_task_due_notifications
 from tasks.models import Task, TaskChangeEvent
+
+
+def _mobile_datetime(value):
+    if value is None:
+        return None
+    dt = value
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, dt_timezone.utc)
+    dt = dt.astimezone(dt_timezone.utc).replace(microsecond=0)
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 def _summary_from_task(task: Task) -> dict:
     return {
         "status": task.status,
         "priority": task.priority,
-        "due_at": task.due_at.isoformat() if task.due_at else None,
-        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+        "due_at": _mobile_datetime(task.due_at),
+        "updated_at": _mobile_datetime(task.updated_at),
     }
 
 

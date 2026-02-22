@@ -5,6 +5,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import Organization, User
 from django.utils.dateparse import parse_datetime
+from django.utils import timezone
 
 
 @pytest.mark.django_db(transaction=True)
@@ -20,10 +21,11 @@ def test_mobile_session_tasks_idempotency_and_delta_sync():
     session_res = client.get("/api/mobile/v1/session")
     assert session_res.status_code == 200
     assert session_res.data["organization_id"] == str(org.id)
+    due_at = timezone.now().isoformat()
 
     create_res = client.post(
         "/api/mobile/v1/tasks",
-        {"title": "Task A", "area": "work"},
+        {"title": "Task A", "area": "work", "due_at": due_at},
         format="json",
         HTTP_IDEMPOTENCY_KEY="task-key-1",
     )
@@ -32,7 +34,7 @@ def test_mobile_session_tasks_idempotency_and_delta_sync():
 
     replay_res = client.post(
         "/api/mobile/v1/tasks",
-        {"title": "Task A", "area": "work"},
+        {"title": "Task A", "area": "work", "due_at": due_at},
         format="json",
         HTTP_IDEMPOTENCY_KEY="task-key-1",
     )
@@ -68,3 +70,9 @@ def test_mobile_session_tasks_idempotency_and_delta_sync():
         assert "." not in delta_res.data["events"][0]["occurred_at"]
         assert delta_res.data["events"][0]["occurred_at"].endswith("Z")
         assert parse_datetime(delta_res.data["events"][0]["occurred_at"]) is not None
+        summary = delta_res.data["events"][0].get("payload_summary") or {}
+        due_at = summary.get("due_at")
+        if due_at:
+            assert "." not in due_at
+            assert due_at.endswith("Z")
+            assert parse_datetime(due_at) is not None

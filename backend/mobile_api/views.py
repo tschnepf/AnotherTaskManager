@@ -7,6 +7,7 @@ from django.conf import settings
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -66,6 +67,22 @@ def _mobile_datetime(value) -> str | None:
         dt = timezone.make_aware(dt, dt_timezone.utc)
     dt = dt.astimezone(dt_timezone.utc).replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def _normalize_payload_summary(payload: Any) -> Any:
+    """Normalize nested datetime strings for strict iOS ISO-8601 decoders."""
+    if isinstance(payload, dict):
+        normalized: dict[str, Any] = {}
+        for key, value in payload.items():
+            if isinstance(value, str) and key in {"due_at", "updated_at", "created_at", "occurred_at", "deleted_at"}:
+                parsed = parse_datetime(value)
+                normalized[key] = _mobile_datetime(parsed) if parsed is not None else value
+            else:
+                normalized[key] = _normalize_payload_summary(value)
+        return normalized
+    if isinstance(payload, list):
+        return [_normalize_payload_summary(item) for item in payload]
+    return payload
 
 
 def _required_scopes() -> list[str]:
@@ -242,7 +259,7 @@ class MobileDeltaSyncView(MobileEnabledAPIView):
                     "cursor": encode_cursor(event.id),
                     "event_type": event.event_type,
                     "task_id": str(event.task_id) if event.task_id else None,
-                    "payload_summary": event.payload_summary,
+                    "payload_summary": _normalize_payload_summary(event.payload_summary),
                     "occurred_at": _mobile_datetime(event.occurred_at),
                     "tombstone": event.event_type == TaskChangeEvent.EventType.DELETED,
                 }
