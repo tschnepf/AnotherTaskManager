@@ -1,6 +1,8 @@
 import base64
 import hashlib
+import logging
 import secrets
+from typing import Any
 from urllib.parse import urlencode
 
 import requests
@@ -28,6 +30,9 @@ from core.serializers import CustomTokenObtainPairSerializer, RegisterSerializer
 
 _OIDC_FLOW_COOKIE = "taskhub_oidc_flow"
 _OIDC_FLOW_SIGNING_SALT = "core.auth.oidc.flow"
+_OIDC_BOOTSTRAP_ONCE_KEYS: set[str] = set()
+_OIDC_BOOTSTRAP_WARNED_KEYS: set[str] = set()
+logger = logging.getLogger(__name__)
 
 
 @method_decorator(csrf_protect, name="dispatch")
@@ -232,6 +237,248 @@ def _oidc_error_redirect(message: str):
     return redirect(f"/login?error={safe}")
 
 
+def _keycloak_admin_base_url() -> str:
+    base = str(getattr(settings, "KEYCLOAK_BASE_URL", "")).strip().rstrip("/")
+    if not base:
+        return ""
+    if "/realms/" in base:
+        base = base.split("/realms/", 1)[0]
+    if base.endswith("/realms"):
+        base = base[: -len("/realms")]
+    if not base.endswith("/idp"):
+        base = f"{base}/idp"
+    return base
+
+
+def _keycloak_admin_headers(access_token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+
+def _keycloak_admin_access_token(*, base_url: str, admin_realm: str, admin_user: str, admin_password: str) -> str:
+    token_url = f"{base_url}/realms/{admin_realm}/protocol/openid-connect/token"
+    response = requests.post(
+        token_url,
+        data={
+            "grant_type": "password",
+            "client_id": "admin-cli",
+            "username": admin_user,
+            "password": admin_password,
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    token = str(payload.get("access_token") or "").strip()
+    if not token:
+        raise RuntimeError("Missing Keycloak admin access token")
+    return token
+
+
+def _keycloak_admin_get_client(*, base_url: str, realm: str, access_token: str, client_id: str) -> dict[str, Any] | None:
+    response = requests.get(
+        f"{base_url}/admin/realms/{realm}/clients",
+        params={"clientId": client_id},
+        headers=_keycloak_admin_headers(access_token),
+        timeout=10,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        return None
+    for item in payload:
+        if isinstance(item, dict) and str(item.get("clientId") or "").strip() == client_id:
+            return item
+    return None
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    unique: list[str] = []
+    for value in values:
+        clean = str(value).strip()
+        if clean and clean not in unique:
+            unique.append(clean)
+    return unique
+
+
+def _ensure_keycloak_web_client(
+    *,
+    base_url: str,
+    realm: str,
+    access_token: str,
+    client_id: str,
+    callback_uri: str,
+    web_origin: str,
+) -> None:
+    existing = _keycloak_admin_get_client(
+        base_url=base_url,
+        realm=realm,
+        access_token=access_token,
+        client_id=client_id,
+    )
+    if existing is None:
+        response = requests.post(
+            f"{base_url}/admin/realms/{realm}/clients",
+            headers=_keycloak_admin_headers(access_token),
+            json={
+                "clientId": client_id,
+                "enabled": True,
+                "protocol": "openid-connect",
+                "publicClient": True,
+                "standardFlowEnabled": True,
+                "directAccessGrantsEnabled": False,
+                "serviceAccountsEnabled": False,
+                "redirectUris": [callback_uri],
+                "webOrigins": [web_origin],
+                "attributes": {
+                    "pkce.code.challenge.method": "S256",
+                },
+            },
+            timeout=10,
+        )
+        if response.status_code not in {201, 204}:
+            raise RuntimeError(f"Failed creating Keycloak client {client_id}: {response.status_code} {response.text}")
+        return
+
+    client_uuid = str(existing.get("id") or "").strip()
+    if not client_uuid:
+        raise RuntimeError("Unable to update Keycloak client: missing client id")
+
+    changed = False
+
+    redirect_uris = _dedupe([*(existing.get("redirectUris") or []), callback_uri])
+    if redirect_uris != list(existing.get("redirectUris") or []):
+        existing["redirectUris"] = redirect_uris
+        changed = True
+
+    web_origins = _dedupe([*(existing.get("webOrigins") or []), web_origin])
+    if web_origins != list(existing.get("webOrigins") or []):
+        existing["webOrigins"] = web_origins
+        changed = True
+
+    if existing.get("publicClient") is not True:
+        existing["publicClient"] = True
+        changed = True
+    if existing.get("standardFlowEnabled") is not True:
+        existing["standardFlowEnabled"] = True
+        changed = True
+    if existing.get("directAccessGrantsEnabled") is not False:
+        existing["directAccessGrantsEnabled"] = False
+        changed = True
+
+    attributes = existing.get("attributes") if isinstance(existing.get("attributes"), dict) else {}
+    if attributes.get("pkce.code.challenge.method") != "S256":
+        attributes["pkce.code.challenge.method"] = "S256"
+        existing["attributes"] = attributes
+        changed = True
+
+    if not changed:
+        return
+
+    response = requests.put(
+        f"{base_url}/admin/realms/{realm}/clients/{client_uuid}",
+        headers=_keycloak_admin_headers(access_token),
+        json=existing,
+        timeout=10,
+    )
+    if response.status_code not in {200, 204}:
+        raise RuntimeError(f"Failed updating Keycloak client {client_id}: {response.status_code} {response.text}")
+
+
+def _ensure_keycloak_signup_settings(*, base_url: str, realm: str, access_token: str) -> None:
+    response = requests.get(
+        f"{base_url}/admin/realms/{realm}",
+        headers=_keycloak_admin_headers(access_token),
+        timeout=10,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise RuntimeError("Invalid Keycloak realm payload")
+
+    changed = False
+    if payload.get("registrationAllowed") is not True:
+        payload["registrationAllowed"] = True
+        changed = True
+    if payload.get("registrationEmailAsUsername") is not True:
+        payload["registrationEmailAsUsername"] = True
+        changed = True
+    if payload.get("loginWithEmailAllowed") is not True:
+        payload["loginWithEmailAllowed"] = True
+        changed = True
+
+    if not changed:
+        return
+
+    update = requests.put(
+        f"{base_url}/admin/realms/{realm}",
+        headers=_keycloak_admin_headers(access_token),
+        json=payload,
+        timeout=10,
+    )
+    if update.status_code not in {200, 204}:
+        raise RuntimeError(f"Failed updating Keycloak realm settings: {update.status_code} {update.text}")
+
+
+def _oidc_web_origin(request) -> str:
+    return request.build_absolute_uri("/").rstrip("/")
+
+
+def _ensure_keycloak_web_oidc_bootstrap(request, *, signup_requested: bool) -> None:
+    if not bool(getattr(settings, "KEYCLOAK_AUTO_BOOTSTRAP_WEB_CLIENT", False)):
+        return
+
+    realm = str(getattr(settings, "KEYCLOAK_REALM", "taskhub")).strip()
+    client_id = _oidc_web_client_id()
+    bootstrap_key = f"{request.get_host()}:{realm}:{client_id}:{int(signup_requested)}"
+    if bootstrap_key in _OIDC_BOOTSTRAP_ONCE_KEYS:
+        return
+
+    base_url = _keycloak_admin_base_url()
+    admin_realm = str(getattr(settings, "KEYCLOAK_ADMIN_REALM", "master")).strip() or "master"
+    admin_user = str(getattr(settings, "KEYCLOAK_ADMIN_USER", "")).strip()
+    admin_password = str(getattr(settings, "KEYCLOAK_ADMIN_PASSWORD", "")).strip()
+
+    if not base_url or not admin_user or not admin_password:
+        if bootstrap_key not in _OIDC_BOOTSTRAP_WARNED_KEYS:
+            logger.warning(
+                "Skipping Keycloak web client bootstrap due to missing admin configuration: "
+                "base_url=%s admin_realm=%s admin_user_present=%s",
+                bool(base_url),
+                admin_realm,
+                bool(admin_user),
+            )
+            _OIDC_BOOTSTRAP_WARNED_KEYS.add(bootstrap_key)
+        return
+
+    try:
+        token = _keycloak_admin_access_token(
+            base_url=base_url,
+            admin_realm=admin_realm,
+            admin_user=admin_user,
+            admin_password=admin_password,
+        )
+        _ensure_keycloak_web_client(
+            base_url=base_url,
+            realm=realm,
+            access_token=token,
+            client_id=client_id,
+            callback_uri=_oidc_callback_uri(request),
+            web_origin=_oidc_web_origin(request),
+        )
+        if signup_requested and _oidc_signup_enabled():
+            _ensure_keycloak_signup_settings(base_url=base_url, realm=realm, access_token=token)
+    except Exception as exc:  # noqa: BLE001
+        if bootstrap_key not in _OIDC_BOOTSTRAP_WARNED_KEYS:
+            logger.warning("Keycloak web client bootstrap failed: %s", exc)
+            _OIDC_BOOTSTRAP_WARNED_KEYS.add(bootstrap_key)
+        return
+
+    _OIDC_BOOTSTRAP_ONCE_KEYS.add(bootstrap_key)
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def oidc_login_start_view(request):
@@ -244,6 +491,8 @@ def oidc_login_start_view(request):
     next_path = str(request.query_params.get("next") or _oidc_post_login_redirect()).strip()
     if not next_path.startswith("/"):
         next_path = _oidc_post_login_redirect()
+    signup = str(request.query_params.get("signup") or "").strip().lower() in {"1", "true", "yes"}
+    _ensure_keycloak_web_oidc_bootstrap(request, signup_requested=signup)
 
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(32)
@@ -265,7 +514,6 @@ def oidc_login_start_view(request):
     audience = str(getattr(settings, "KEYCLOAK_REQUIRED_AUDIENCE", "")).strip()
     if audience:
         params["audience"] = audience
-    signup = str(request.query_params.get("signup") or "").strip().lower() in {"1", "true", "yes"}
     if signup and _oidc_signup_enabled():
         params["kc_action"] = "register"
 

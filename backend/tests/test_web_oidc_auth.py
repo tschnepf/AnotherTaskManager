@@ -24,6 +24,40 @@ class _FakeHTTPResponse:
         return self._payload
 
 
+class _Recorder:
+    def __init__(self):
+        self.calls: list[tuple[str, str, dict]] = []
+
+    def post(self, url, **kwargs):
+        self.calls.append(("POST", url, kwargs))
+        if url.endswith("/realms/master/protocol/openid-connect/token"):
+            return _FakeHTTPResponse(200, {"access_token": "admin-token"})
+        if url.endswith("/admin/realms/taskhub/clients"):
+            return _FakeHTTPResponse(201, {})
+        raise AssertionError(f"Unexpected POST {url}")
+
+    def get(self, url, **kwargs):
+        self.calls.append(("GET", url, kwargs))
+        if "/admin/realms/taskhub/clients" in url:
+            return _FakeHTTPResponse(200, [])
+        if url.endswith("/admin/realms/taskhub"):
+            return _FakeHTTPResponse(
+                200,
+                {
+                    "registrationAllowed": False,
+                    "registrationEmailAsUsername": False,
+                    "loginWithEmailAllowed": False,
+                },
+            )
+        raise AssertionError(f"Unexpected GET {url}")
+
+    def put(self, url, **kwargs):
+        self.calls.append(("PUT", url, kwargs))
+        if url.endswith("/admin/realms/taskhub"):
+            return _FakeHTTPResponse(204, {})
+        raise AssertionError(f"Unexpected PUT {url}")
+
+
 @pytest.mark.django_db
 @override_settings(
     KEYCLOAK_WEB_AUTH_ENABLED=True,
@@ -31,6 +65,7 @@ class _FakeHTTPResponse:
     KEYCLOAK_PUBLIC_BASE_URL="https://tasks.example.com",
     KEYCLOAK_REALM="taskhub",
     AUTH_COOKIE_SECURE=True,
+    KEYCLOAK_AUTO_BOOTSTRAP_WEB_CLIENT=False,
 )
 def test_web_oidc_start_redirect_sets_signed_flow_cookie():
     client = APIClient()
@@ -54,6 +89,7 @@ def test_web_oidc_start_redirect_sets_signed_flow_cookie():
     KEYCLOAK_PUBLIC_BASE_URL="https://tasks.example.com",
     KEYCLOAK_REALM="taskhub",
     KEYCLOAK_WEB_SIGNUP_ENABLED=True,
+    KEYCLOAK_AUTO_BOOTSTRAP_WEB_CLIENT=False,
 )
 def test_web_oidc_start_signup_sets_kc_action_register():
     client = APIClient()
@@ -73,6 +109,7 @@ def test_web_oidc_start_signup_sets_kc_action_register():
     KEYCLOAK_REQUIRED_AUDIENCE="taskhub-api",
     KEYCLOAK_AUTO_PROVISION_USERS=True,
     KEYCLOAK_AUTO_PROVISION_ORGANIZATION=True,
+    KEYCLOAK_AUTO_BOOTSTRAP_WEB_CLIENT=False,
 )
 def test_web_oidc_callback_creates_session_and_identity(monkeypatch):
     from core import auth_views as auth_mod
@@ -124,3 +161,40 @@ def test_web_oidc_start_disabled_returns_404():
     client = APIClient()
     response = client.get("/auth/oidc/start")
     assert response.status_code == 404
+
+
+@pytest.mark.django_db
+@override_settings(
+    KEYCLOAK_WEB_AUTH_ENABLED=True,
+    KEYCLOAK_WEB_CLIENT_ID="taskhub-web",
+    KEYCLOAK_PUBLIC_BASE_URL="https://tasks.example.com",
+    KEYCLOAK_REALM="taskhub",
+    KEYCLOAK_WEB_SIGNUP_ENABLED=True,
+    KEYCLOAK_AUTO_BOOTSTRAP_WEB_CLIENT=True,
+    KEYCLOAK_BASE_URL="http://keycloak:8080/idp",
+    KEYCLOAK_ADMIN_REALM="master",
+    KEYCLOAK_ADMIN_USER="admin",
+    KEYCLOAK_ADMIN_PASSWORD="admin",
+)
+def test_web_oidc_start_bootstraps_missing_keycloak_client(monkeypatch):
+    from core import auth_views as auth_mod
+
+    auth_mod._OIDC_BOOTSTRAP_ONCE_KEYS.clear()
+    auth_mod._OIDC_BOOTSTRAP_WARNED_KEYS.clear()
+    recorder = _Recorder()
+    monkeypatch.setattr(auth_mod.requests, "post", recorder.post)
+    monkeypatch.setattr(auth_mod.requests, "get", recorder.get)
+    monkeypatch.setattr(auth_mod.requests, "put", recorder.put)
+
+    client = APIClient()
+    response = client.get("/auth/oidc/start?signup=1")
+    assert response.status_code == 302
+    assert response["Location"].startswith("https://tasks.example.com/idp/realms/taskhub/protocol/openid-connect/auth?")
+    assert any(
+        method == "POST" and url.endswith("/admin/realms/taskhub/clients")
+        for method, url, _ in recorder.calls
+    )
+    assert any(
+        method == "PUT" and url.endswith("/admin/realms/taskhub")
+        for method, url, _ in recorder.calls
+    )
