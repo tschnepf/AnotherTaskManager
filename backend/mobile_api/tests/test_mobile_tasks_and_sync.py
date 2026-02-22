@@ -54,12 +54,15 @@ def test_mobile_session_tasks_idempotency_and_delta_sync():
     assert list_res.status_code == 200
     assert isinstance(list_res.data, list)
     assert list_res.data
-    assert {"id", "title", "is_completed", "due_at"}.issubset(set(list_res.data[0].keys()))
+    assert {"id", "title", "is_completed", "due_at", "updated_at"}.issubset(set(list_res.data[0].keys()))
     assert isinstance(list_res.data[0]["is_completed"], bool)
     if list_res.data[0]["due_at"]:
         assert "." not in list_res.data[0]["due_at"]
         assert list_res.data[0]["due_at"].endswith("Z")
         assert parse_datetime(list_res.data[0]["due_at"]) is not None
+    assert "." not in list_res.data[0]["updated_at"]
+    assert list_res.data[0]["updated_at"].endswith("Z")
+    assert parse_datetime(list_res.data[0]["updated_at"]) is not None
 
     delta_res = client.get("/api/mobile/v1/sync/delta", {"cursor": "0", "limit": "100"})
     assert delta_res.status_code == 200
@@ -70,9 +73,15 @@ def test_mobile_session_tasks_idempotency_and_delta_sync():
         assert "." not in delta_res.data["events"][0]["occurred_at"]
         assert delta_res.data["events"][0]["occurred_at"].endswith("Z")
         assert parse_datetime(delta_res.data["events"][0]["occurred_at"]) is not None
+        assert delta_res.data["events"][0]["event_type"] in {"task.created", "task.updated", "task.deleted"}
         summary = delta_res.data["events"][0].get("payload_summary") or {}
+        assert {"title", "is_completed", "due_at", "updated_at"}.issubset(summary.keys())
+        assert isinstance(summary["is_completed"], bool)
         due_at = summary.get("due_at")
         if due_at:
             assert "." not in due_at
             assert due_at.endswith("Z")
             assert parse_datetime(due_at) is not None
+        assert "." not in summary["updated_at"]
+        assert summary["updated_at"].endswith("Z")
+        assert parse_datetime(summary["updated_at"]) is not None

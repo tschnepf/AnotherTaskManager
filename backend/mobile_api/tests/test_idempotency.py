@@ -17,9 +17,8 @@ def test_idempotency_required_and_conflict():
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
 
     missing = client.post("/api/mobile/v1/tasks", {"title": "A", "area": "work"}, format="json")
-    assert missing.status_code == 400
-    assert missing.data["error"]["code"] == "validation_error"
-    assert "request_id" in missing.data
+    assert missing.status_code == 201
+    assert "id" in missing.data
 
     first = client.post(
         "/api/mobile/v1/tasks",

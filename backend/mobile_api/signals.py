@@ -23,6 +23,8 @@ def _mobile_datetime(value):
 
 def _summary_from_task(task: Task) -> dict:
     return {
+        "title": task.title,
+        "is_completed": task.status in {Task.Status.DONE, Task.Status.ARCHIVED},
         "status": task.status,
         "priority": task.priority,
         "due_at": _mobile_datetime(task.due_at),
@@ -56,7 +58,7 @@ def task_deleted_emit_event(sender, instance: Task, **kwargs):
             organization=organization,
             event_type=TaskChangeEvent.EventType.DELETED,
             task_id=deleted_task_id,
-            payload_summary={"status": Task.Status.ARCHIVED},
+            payload_summary=_summary_from_task(instance),
         )
 
     transaction.on_commit(_create_event)

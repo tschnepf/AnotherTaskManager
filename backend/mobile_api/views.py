@@ -85,6 +85,93 @@ def _normalize_payload_summary(payload: Any) -> Any:
     return payload
 
 
+def _task_is_completed(status_value: Any) -> bool:
+    return str(status_value) in {Task.Status.DONE, Task.Status.ARCHIVED}
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
+
+
+def _coerce_mobile_datetime(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        parsed = parse_datetime(value)
+        return _mobile_datetime(parsed) if parsed is not None else value
+    return _mobile_datetime(value)
+
+
+def _mobile_event_type(event_type: str) -> str:
+    mapping = {
+        TaskChangeEvent.EventType.CREATED: "task.created",
+        TaskChangeEvent.EventType.UPDATED: "task.updated",
+        TaskChangeEvent.EventType.DELETED: "task.deleted",
+        TaskChangeEvent.EventType.ARCHIVED: "task.deleted",
+    }
+    return mapping.get(str(event_type), "task.updated")
+
+
+def _mobile_payload_summary(event: TaskChangeEvent, task: Task | None) -> dict[str, Any]:
+    raw = event.payload_summary if isinstance(event.payload_summary, dict) else {}
+
+    title = raw.get("title")
+    if title is None and task is not None:
+        title = task.title
+
+    is_completed = raw.get("is_completed")
+    if is_completed is None and raw.get("status") is not None:
+        is_completed = _task_is_completed(raw.get("status"))
+    if is_completed is None and task is not None:
+        is_completed = _task_is_completed(task.status)
+    if is_completed is None:
+        is_completed = event.event_type in {TaskChangeEvent.EventType.DELETED, TaskChangeEvent.EventType.ARCHIVED}
+
+    due_at = raw.get("due_at")
+    if due_at is None and task is not None:
+        due_at = task.due_at
+
+    updated_at = raw.get("updated_at")
+    if updated_at is None and task is not None:
+        updated_at = task.updated_at
+    if updated_at is None:
+        updated_at = event.occurred_at
+
+    summary: dict[str, Any] = {
+        "title": str(title or ""),
+        "is_completed": _coerce_bool(is_completed, default=False),
+        "due_at": _coerce_mobile_datetime(due_at),
+        "updated_at": _coerce_mobile_datetime(updated_at),
+    }
+    for key, value in raw.items():
+        if key not in summary:
+            summary[key] = value
+    return _normalize_payload_summary(summary)
+
+
+def _normalize_device_register_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    if "apns_device_token" in normalized:
+        normalized.setdefault("apns_token", normalized["apns_device_token"])
+        normalized.pop("apns_device_token", None)
+    if "build_number" in normalized:
+        normalized.setdefault("app_build", normalized["build_number"])
+        normalized.pop("build_number", None)
+    return normalized
+
+
 def _required_scopes() -> list[str]:
     return ["openid", "offline_access", "mobile.read", "mobile.write", "mobile.sync", "mobile.notify"]
 
@@ -225,7 +312,20 @@ class MobileDeltaSyncView(MobileEnabledAPIView):
     def get(self, request):
         org = self._org()
         cursor_token = str(request.query_params.get("cursor") or "").strip()
-        cursor_id = decode_cursor(cursor_token)
+        try:
+            cursor_id = decode_cursor(cursor_token)
+        except serializers.ValidationError:
+            return Response(
+                {
+                    "error": {
+                        "code": "cursor_expired",
+                        "message": "invalid or expired cursor, perform full resync",
+                        "details": {},
+                    },
+                    "request_id": request_id_from_headers(request.headers),
+                },
+                status=status.HTTP_410_GONE,
+            )
 
         limit_default = 100
         limit_cap = int(getattr(settings, "MOBILE_SYNC_MAX_PAGE_SIZE", 500))
@@ -251,17 +351,29 @@ class MobileDeltaSyncView(MobileEnabledAPIView):
             )
 
         events = list(events_qs.filter(id__gt=cursor_id)[:limit])
+        task_ids = [event.task_id for event in events if event.task_id is not None]
+        tasks_by_id = {
+            task.id: task
+            for task in Task.objects.filter(organization=org, id__in=task_ids).only(
+                "id",
+                "title",
+                "status",
+                "due_at",
+                "updated_at",
+            )
+        }
         next_cursor = encode_cursor(events[-1].id if events else cursor_id)
         payload_events: list[dict[str, Any]] = []
         for event in events:
+            mobile_event_type = _mobile_event_type(event.event_type)
             payload_events.append(
                 {
                     "cursor": encode_cursor(event.id),
-                    "event_type": event.event_type,
+                    "event_type": mobile_event_type,
                     "task_id": str(event.task_id) if event.task_id else None,
-                    "payload_summary": _normalize_payload_summary(event.payload_summary),
+                    "payload_summary": _mobile_payload_summary(event, tasks_by_id.get(event.task_id)),
                     "occurred_at": _mobile_datetime(event.occurred_at),
-                    "tombstone": event.event_type == TaskChangeEvent.EventType.DELETED,
+                    "tombstone": mobile_event_type == "task.deleted",
                 }
             )
 
@@ -321,11 +433,13 @@ class MobileDeviceRegisterView(MobileEnabledAPIView):
     def post(self, request):
         # Compatibility contract for Xcode sample payload:
         # {token, platform, app_version}
-        payload = request.data
+        payload = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
         if "token" in payload or "platform" in payload:
             compatibility = XcodeDeviceRegisterSerializer(data=payload)
             compatibility.is_valid(raise_exception=True)
             payload = compatibility.as_mobile_device_payload()
+        else:
+            payload = _normalize_device_register_payload(payload)
 
         serializer = MobileDeviceSerializer(data=payload, context={"request": request})
         serializer.is_valid(raise_exception=True)

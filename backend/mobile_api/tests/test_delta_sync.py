@@ -29,9 +29,15 @@ def test_delta_sync_uses_opaque_cursor_tokens():
     assert res.data["events"]
     assert str(res.data["next_cursor"]).startswith("v1.")
     assert all(str(item["cursor"]).startswith("v1.") for item in res.data["events"])
+    assert all(str(item["event_type"]).startswith("task.") for item in res.data["events"])
 
     follow_up = client.get("/api/mobile/v1/sync/delta", {"cursor": res.data["next_cursor"]})
     assert follow_up.status_code == 200
+
+    # iOS URL edge case: cursor key is present but has no value (?cursor).
+    no_value_cursor = client.get("/api/mobile/v1/sync/delta?cursor")
+    assert no_value_cursor.status_code == 200
+    assert isinstance(no_value_cursor.data["events"], list)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -62,3 +68,17 @@ def test_delta_sync_cursor_expired_contract():
     assert expired.status_code == 410
     assert expired.data["error"]["code"] == "cursor_expired"
     assert "request_id" in expired.data
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(MOBILE_API_ENABLED=True, KEYCLOAK_AUTH_ENABLED=False)
+def test_delta_sync_invalid_cursor_is_cursor_expired():
+    org = Organization.objects.create(name="Org")
+    user = User.objects.create_user(email="sync-invalid@example.com", password="StrongPass123!", organization=org)
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    res = client.get("/api/mobile/v1/sync/delta", {"cursor": "not-a-valid-cursor"})
+    assert res.status_code == 410
+    assert res.data["error"]["code"] == "cursor_expired"

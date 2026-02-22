@@ -154,3 +154,35 @@ def test_xcode_compat_rejects_non_ios_platform():
         format="json",
     )
     assert unregister.status_code == 400
+
+
+@pytest.mark.django_db
+@override_settings(
+    MOBILE_API_ENABLED=True,
+    KEYCLOAK_AUTH_ENABLED=False,
+    APNS_USE_SANDBOX=True,
+)
+def test_mobile_device_register_accepts_ios_contract_aliases():
+    org = Organization.objects.create(name="Org")
+    user = User.objects.create_user(email="ios-device@example.com", password="StrongPass123!", organization=org)
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    register = client.post(
+        "/api/mobile/v1/devices/register",
+        {
+            "apns_device_token": "ios-alias-token-1",
+            "apns_environment": MobileDevice.APNsEnvironment.SANDBOX,
+            "device_installation_id": "ios-install-1",
+            "app_version": "2.0.0",
+            "build_number": "200",
+            "ios_version": "18.3",
+            "timezone": "America/New_York",
+        },
+        format="json",
+    )
+    assert register.status_code == 201
+    assert "id" in register.data
+    assert register.data["app_build"] == "200"

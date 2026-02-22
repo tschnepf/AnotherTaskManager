@@ -201,10 +201,11 @@ class MobileTaskCreateSerializer(TaskSerializer):
 class MobileTaskSerializer(serializers.ModelSerializer):
     is_completed = serializers.SerializerMethodField()
     due_at = MobileDateTimeField(allow_null=True, required=False)
+    updated_at = MobileDateTimeField()
 
     class Meta:
         model = Task
-        fields = ["id", "title", "is_completed", "due_at"]
+        fields = ["id", "title", "is_completed", "due_at", "updated_at"]
 
     def get_is_completed(self, instance: Task) -> bool:
         return instance.status in {Task.Status.DONE, Task.Status.ARCHIVED}
