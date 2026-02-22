@@ -35,6 +35,42 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "taskhub-web",
+      "publicClient": true,
+      "directAccessGrantsEnabled": false,
+      "standardFlowEnabled": true,
+      "redirectUris": [
+        "https://tasks.example.com/auth/oidc/callback",
+        "https://tasks.tardis-proxy.com/auth/oidc/callback",
+        "http://localhost:8080/auth/oidc/callback"
+      ],
+      "webOrigins": [
+        "https://tasks.example.com",
+        "https://tasks.tardis-proxy.com",
+        "http://localhost:8080"
+      ],
+      "defaultClientScopes": [
+        "profile",
+        "email",
+        "roles"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "introspection.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
   "clientScopes": [

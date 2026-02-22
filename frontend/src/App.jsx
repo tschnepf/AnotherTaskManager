@@ -14,7 +14,6 @@ import {
   getProjects,
   getTasks,
   initiateGoogleEmailOAuth,
-  login,
   logout as logoutSession,
   quickAddTask,
   reorderTask,
@@ -837,40 +836,29 @@ function formatCreatedTimestamp(value) {
   return months === 1 ? '1 month ago' : `${months} months ago`
 }
 
-function AuthPage({ onLoggedIn }) {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
+function AuthPage() {
+  const location = useLocation()
+  const [isRedirecting, setIsRedirecting] = useState(false)
 
-  async function handleSubmit(event) {
-    event.preventDefault()
-    setError('')
-    try {
-      await login(email, password)
-      await onLoggedIn()
-    } catch (e) {
-      setError(e.message)
-    }
+  const params = new URLSearchParams(location.search)
+  const error = params.get('error') || ''
+
+  function handleOidcSignIn() {
+    setIsRedirecting(true)
+    const next = encodeURIComponent('/')
+    window.location.assign(`/auth/oidc/start?next=${next}`)
   }
 
   return (
     <div className="auth-wrap">
-      <form className="auth-card" onSubmit={handleSubmit}>
+      <div className="auth-card">
         <h1>Task Hub</h1>
         <p>Sign in</p>
-        <label htmlFor="email">Email</label>
-        <input id="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        <label htmlFor="password">Password</label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
         {error ? <p className="error-text">{error}</p> : null}
-        <button type="submit">Log In</button>
-      </form>
+        <button type="button" onClick={handleOidcSignIn} disabled={isRedirecting}>
+          {isRedirecting ? 'Redirecting…' : 'Continue with TaskHub ID'}
+        </button>
+      </div>
     </div>
   )
 }
@@ -3331,13 +3319,6 @@ export default function App() {
     }
   }, [clearSession])
 
-  async function handleLogin() {
-    await getAuthSession()
-    setIsAuthenticated(true)
-    setAuthReady(true)
-    navigate('/', { replace: true })
-  }
-
   async function handleLogout() {
     try {
       await logoutSession()
@@ -3361,7 +3342,7 @@ export default function App() {
 
   return (
     <Routes>
-      <Route path="/login" element={<AuthPage onLoggedIn={handleLogin} />} />
+      <Route path="/login" element={<AuthPage />} />
       <Route path="/" element={<Dashboard token={token} onLogout={handleLogout} />} />
       <Route path="/tasks" element={<Dashboard token={token} onLogout={handleLogout} />} />
       <Route path="/settings" element={<Dashboard token={token} onLogout={handleLogout} />} />

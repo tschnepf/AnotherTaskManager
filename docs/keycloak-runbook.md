@@ -12,6 +12,27 @@ bash tools/keycloak/validate-realm-export.sh tools/keycloak/realm-export/taskhub
 ```
 7. Validate OIDC public endpoint reachability using `docs/oidc-public-endpoints-runbook.md`.
 
+## Fresh deployment bootstrap (single first-admin command)
+1. Enable web/mobile IdP auth and JIT provisioning in environment:
+   - `KEYCLOAK_AUTH_ENABLED=true`
+   - `MOBILE_API_ENABLED=true`
+   - `KEYCLOAK_WEB_AUTH_ENABLED=true`
+   - `KEYCLOAK_WEB_CLIENT_ID=taskhub-web`
+   - `KEYCLOAK_AUTO_PROVISION_USERS=true`
+   - `KEYCLOAK_AUTO_PROVISION_ORGANIZATION=true`
+2. Create first admin in both Keycloak and Django with one command:
+```bash
+docker exec -it taskhub-api python backend/manage.py bootstrap_idp_admin \
+  --email admin@example.com \
+  --password 'REPLACE_WITH_STRONG_PASSWORD' \
+  --first-name Admin \
+  --last-name User \
+  --organization-name "Task Hub" \
+  --role owner
+```
+3. Use `/login` web page -> `Continue with TaskHub ID` (OIDC).
+4. iOS login uses same IdP credentials.
+
 ## Migration + onboarding
 1. Export existing Django users to CSV:
 ```bash
