@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import logging
 import secrets
 from typing import Any
@@ -23,7 +24,7 @@ from rest_framework_simplejwt.settings import api_settings as jwt_api_settings
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from core.oidc_identity import resolve_or_provision_identity
+from core.oidc_identity import extract_email, resolve_or_provision_identity
 from core.oidc_urls import build_realm_url
 from core.serializers import CustomTokenObtainPairSerializer, RegisterSerializer
 
@@ -292,6 +293,100 @@ def _keycloak_admin_get_client(*, base_url: str, realm: str, access_token: str, 
         if isinstance(item, dict) and str(item.get("clientId") or "").strip() == client_id:
             return item
     return None
+
+
+def _keycloak_admin_get_user_by_subject(
+    *,
+    base_url: str,
+    realm: str,
+    access_token: str,
+    subject: str,
+) -> dict[str, Any] | None:
+    user_id = str(subject or "").strip()
+    if not user_id:
+        return None
+    response = requests.get(
+        f"{base_url}/admin/realms/{realm}/users/{user_id}",
+        headers=_keycloak_admin_headers(access_token),
+        timeout=10,
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    payload = response.json()
+    return payload if isinstance(payload, dict) else None
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    parts = str(token or "").split(".")
+    if len(parts) < 2:
+        return {}
+    payload_b64 = parts[1]
+    padding = "=" * ((4 - len(payload_b64) % 4) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(f"{payload_b64}{padding}".encode("ascii"))
+        parsed = json.loads(raw.decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _merge_missing_claims(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in extra.items():
+        if key not in merged or merged.get(key) in {"", None}:
+            merged[key] = value
+    return merged
+
+
+def _enrich_claims_for_provisioning(claims: dict[str, Any], token_payload: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(claims)
+    id_token_claims = _decode_jwt_payload(str(token_payload.get("id_token") or "").strip())
+    if id_token_claims:
+        merged = _merge_missing_claims(merged, id_token_claims)
+
+    if extract_email(merged):
+        return merged
+
+    base_url = _keycloak_admin_base_url()
+    realm = str(getattr(settings, "KEYCLOAK_REALM", "taskhub")).strip()
+    admin_realm = str(getattr(settings, "KEYCLOAK_ADMIN_REALM", "master")).strip() or "master"
+    admin_user = str(getattr(settings, "KEYCLOAK_ADMIN_USER", "")).strip()
+    admin_password = str(getattr(settings, "KEYCLOAK_ADMIN_PASSWORD", "")).strip()
+    subject = str(merged.get("sub") or "").strip()
+    if not base_url or not admin_user or not admin_password or not subject:
+        return merged
+
+    try:
+        admin_token = _keycloak_admin_access_token(
+            base_url=base_url,
+            admin_realm=admin_realm,
+            admin_user=admin_user,
+            admin_password=admin_password,
+        )
+        kc_user = _keycloak_admin_get_user_by_subject(
+            base_url=base_url,
+            realm=realm,
+            access_token=admin_token,
+            subject=subject,
+        )
+        if not kc_user:
+            return merged
+        admin_claims: dict[str, Any] = {
+            "email": kc_user.get("email"),
+            "preferred_username": kc_user.get("username"),
+            "given_name": kc_user.get("firstName"),
+            "family_name": kc_user.get("lastName"),
+            "name": " ".join(
+                [
+                    str(kc_user.get("firstName") or "").strip(),
+                    str(kc_user.get("lastName") or "").strip(),
+                ]
+            ).strip(),
+        }
+        return _merge_missing_claims(merged, admin_claims)
+    except Exception:  # noqa: BLE001
+        return merged
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -619,6 +714,8 @@ def oidc_callback_view(request):
         claims = userinfo_response.json()
     except Exception:  # noqa: BLE001
         return _oidc_error_redirect("oidc_exchange_failed")
+
+    claims = _enrich_claims_for_provisioning(claims, token_payload)
 
     subject = str(claims.get("sub") or "").strip()
     if not subject:
