@@ -872,7 +872,15 @@ function AuthPage() {
   )
 }
 
-function QuickAdd({ token, projects, onTaskCreated, onProjectCreated, inline = false }) {
+function QuickAdd({
+  token,
+  projects,
+  onTaskCreated,
+  onProjectCreated,
+  inline = false,
+  className = '',
+  autoFocusTitle = false,
+}) {
   const [title, setTitle] = useState('')
   const [area, setArea] = useState('work')
   const [priorityLevel, setPriorityLevel] = useState('')
@@ -1063,13 +1071,18 @@ function QuickAdd({ token, projects, onTaskCreated, onProjectCreated, inline = f
     }
   }
 
+  const quickAddClassName = ['quick-add', inline ? 'quick-add-inline' : '', className]
+    .filter(Boolean)
+    .join(' ')
+
   return (
-    <form className={inline ? 'quick-add quick-add-inline' : 'quick-add'} onSubmit={submit}>
+    <form className={quickAddClassName} onSubmit={submit}>
       <input
         placeholder="Quick add task"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         aria-label="Quick add task"
+        autoFocus={autoFocusTitle}
       />
       <select value={area} onChange={(e) => setArea(e.target.value)} aria-label="Area">
         <option value="work">Work</option>
@@ -1749,6 +1762,7 @@ function Dashboard({ token, onLogout }) {
   const [attachmentPreview, setAttachmentPreview] = useState(null)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [isMobileQuickAddOpen, setIsMobileQuickAddOpen] = useState(false)
+  const [isDesktopQuickAddOpen, setIsDesktopQuickAddOpen] = useState(false)
   const projectNameById = useMemo(
     () => Object.fromEntries(projects.map((project) => [project.id, project.name])),
     [projects]
@@ -1853,8 +1867,26 @@ function Dashboard({ token, onLogout }) {
   }, [attachmentPreview])
 
   useEffect(() => {
+    if (!isDesktopQuickAddOpen) {
+      return undefined
+    }
+
+    function handleEscape(event) {
+      if (event.key === 'Escape') {
+        setIsDesktopQuickAddOpen(false)
+      }
+    }
+
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [isDesktopQuickAddOpen])
+
+  useEffect(() => {
     setIsSidebarOpen(false)
     setIsMobileQuickAddOpen(false)
+    setIsDesktopQuickAddOpen(false)
   }, [location.pathname])
 
   useEffect(() => {
@@ -2029,6 +2061,7 @@ function Dashboard({ token, onLogout }) {
   function handleTaskCreated() {
     setReloadCounter((value) => value + 1)
     setIsMobileQuickAddOpen(false)
+    setIsDesktopQuickAddOpen(false)
   }
 
   function handleProjectCreated(project) {
@@ -2044,6 +2077,7 @@ function Dashboard({ token, onLogout }) {
     setActiveView(nextView)
     setIsSidebarOpen(false)
     setIsMobileQuickAddOpen(false)
+    setIsDesktopQuickAddOpen(false)
     if (isSettingsView) {
       navigate('/tasks')
     }
@@ -2052,6 +2086,7 @@ function Dashboard({ token, onLogout }) {
   function openSettingsView() {
     setIsSidebarOpen(false)
     setIsMobileQuickAddOpen(false)
+    setIsDesktopQuickAddOpen(false)
     navigate('/settings')
   }
 
@@ -2866,13 +2901,13 @@ function Dashboard({ token, onLogout }) {
                     </label>
                   </div>
                 </div>
-                <QuickAdd
-                  token={token}
-                  projects={projects}
-                  onTaskCreated={handleTaskCreated}
-                  onProjectCreated={handleProjectCreated}
-                  inline
-                />
+                <button
+                  type="button"
+                  className="desktop-quick-add-trigger"
+                  onClick={() => setIsDesktopQuickAddOpen(true)}
+                >
+                  Add
+                </button>
               </>
             )}
           </div>
@@ -2888,6 +2923,37 @@ function Dashboard({ token, onLogout }) {
             </button>
           ) : null}
         </header>
+
+        {!isSettingsView && isDesktopQuickAddOpen ? (
+          <div
+            className="desktop-quick-add-popover-backdrop"
+            role="presentation"
+            onClick={() => setIsDesktopQuickAddOpen(false)}
+          >
+            <div
+              className="desktop-quick-add-popover"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Add task"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="desktop-quick-add-popover-header">
+                <h2>Add Task</h2>
+                <button type="button" onClick={() => setIsDesktopQuickAddOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <QuickAdd
+                token={token}
+                projects={projects}
+                onTaskCreated={handleTaskCreated}
+                onProjectCreated={handleProjectCreated}
+                className="quick-add-popover-form"
+                autoFocusTitle
+              />
+            </div>
+          </div>
+        ) : null}
 
         {!isSettingsView && isMobileQuickAddOpen ? (
           <div

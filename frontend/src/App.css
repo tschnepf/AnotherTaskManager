@@ -347,6 +347,24 @@ button {
   flex-wrap: wrap;
 }
 
+.desktop-quick-add-trigger {
+  border: 1px solid #2f63a8;
+  background: #1f4f9a;
+  color: #f4f8ff;
+  font-weight: 600;
+  min-width: 84px;
+}
+
+.desktop-quick-add-trigger:hover {
+  border-color: #3d72be;
+  background: #255fb9;
+}
+
+.desktop-quick-add-trigger:focus-visible {
+  outline: 2px solid #8db6ff;
+  outline-offset: 2px;
+}
+
 .content {
   padding: 20px;
 }
@@ -1237,6 +1255,60 @@ td {
   margin: 0;
 }
 
+.desktop-quick-add-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 56;
+  background: rgba(8, 12, 17, 0.62);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 92px 20px 20px;
+}
+
+.desktop-quick-add-popover {
+  width: min(680px, 100%);
+  max-height: calc(100vh - 112px);
+  overflow-y: auto;
+  background: #111821;
+  border: 1px solid #2c3744;
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.desktop-quick-add-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.desktop-quick-add-popover-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.quick-add-popover-form {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  grid-template-columns: 1fr;
+}
+
+.quick-add-popover-form .project-suggestions {
+  z-index: 30;
+}
+
+.quick-add-popover-form .error-text {
+  margin: 0;
+}
+
+.quick-add-popover-form button[type='submit'] {
+  justify-self: start;
+  min-width: 88px;
+}
+
 .mobile-quick-add-sheet-backdrop {
   position: fixed;
   inset: 0;
@@ -1419,6 +1491,11 @@ td {
     color: #f3f7fb;
     font-size: 24px;
     line-height: 1;
+  }
+
+  .desktop-quick-add-trigger,
+  .desktop-quick-add-popover-backdrop {
+    display: none;
   }
 
   .topbar {
