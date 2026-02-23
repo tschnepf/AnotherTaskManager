@@ -1,4 +1,6 @@
-from django.db import transaction
+from uuid import UUID
+
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 from django.db.models import Max
 from django.utils import timezone
@@ -60,6 +62,63 @@ class TaskSerializer(serializers.ModelSerializer):
             "completed_at",
             "position",
         ]
+
+    def _project_name_from_payload(self) -> str | None:
+        return getattr(self, "_project_name_from_input", None)
+
+    def _set_project_name_from_payload(self, value: str | None) -> None:
+        self._project_name_from_input = value
+
+    def _is_uuid_string(self, value: str) -> bool:
+        try:
+            UUID(str(value))
+            return True
+        except (TypeError, ValueError):
+            return False
+
+    def to_internal_value(self, data):
+        self._set_project_name_from_payload(None)
+        mutable_data = data.copy() if hasattr(data, "copy") else dict(data)
+        raw_project = mutable_data.get("project", serializers.empty)
+
+        if isinstance(raw_project, str):
+            normalized = raw_project.strip()
+            if not normalized:
+                mutable_data["project"] = None
+            elif self._is_uuid_string(normalized):
+                mutable_data["project"] = normalized
+            else:
+                if len(normalized) > 255:
+                    raise serializers.ValidationError({"project": "project name is too long"})
+                self._set_project_name_from_payload(normalized)
+                mutable_data["project"] = None
+
+        return super().to_internal_value(mutable_data)
+
+    def _resolve_project_from_name(self, *, name: str | None, area: str | None) -> Project | None:
+        if not name:
+            return None
+        request = self.context["request"]
+        org = request.user.organization
+        if org is None:
+            raise serializers.ValidationError("user must belong to an organization")
+
+        existing = Project.objects.filter(organization=org, name__iexact=name).first()
+        if existing is not None:
+            return existing
+
+        project_area = area or Task.Area.WORK
+        try:
+            return Project.objects.create(
+                organization=org,
+                name=name,
+                area=project_area,
+            )
+        except IntegrityError:
+            existing = Project.objects.filter(organization=org, name__iexact=name).first()
+            if existing is not None:
+                return existing
+            raise
 
     def validate(self, attrs):
         request = self.context["request"]
@@ -158,6 +217,12 @@ class TaskSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         tags = validated_data.pop("tags", [])
+        project_name = self._project_name_from_payload()
+        if project_name:
+            validated_data["project"] = self._resolve_project_from_name(
+                name=project_name,
+                area=validated_data.get("area"),
+            )
         user = self.context["request"].user
         next_position = (
             Task.objects.filter(organization=user.organization).aggregate(max_position=Max("position"))[
@@ -177,6 +242,12 @@ class TaskSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         tags = validated_data.pop("tags", None)
+        project_name = self._project_name_from_payload()
+        if project_name:
+            validated_data["project"] = self._resolve_project_from_name(
+                name=project_name,
+                area=validated_data.get("area") or instance.area,
+            )
         old_status = instance.status
         status_changed_to_done = False
         for key, value in validated_data.items():

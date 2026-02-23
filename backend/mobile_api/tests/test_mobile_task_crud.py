@@ -4,7 +4,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import Organization, User
-from tasks.models import Task
+from tasks.models import Project, Task
 
 
 @pytest.mark.django_db
@@ -46,3 +46,37 @@ def test_mobile_task_crud_and_cross_tenant_404():
 
     delete = client.delete(f"/api/mobile/v1/tasks/{task_id}")
     assert delete.status_code == 204
+
+
+@pytest.mark.django_db
+@override_settings(MOBILE_API_ENABLED=True, KEYCLOAK_AUTH_ENABLED=False)
+def test_mobile_tasks_accept_project_name_match_or_create():
+    org = Organization.objects.create(name="Org Project")
+    user = User.objects.create_user(email="mobile-project@example.com", password="StrongPass123!", organization=org)
+    existing_project = Project.objects.create(organization=org, name="Client Alpha", area=Project.Area.WORK)
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    matched = client.post(
+        "/api/mobile/v1/tasks",
+        {"title": "Task with existing project", "area": "work", "project": "client alpha"},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="mobile-project-name-1",
+    )
+    assert matched.status_code == 201
+    matched_task = Task.objects.get(id=matched.data["id"])
+    assert matched_task.project_id == existing_project.id
+
+    created = client.post(
+        "/api/mobile/v1/tasks",
+        {"title": "Task with new project", "area": "personal", "project": "Household"},
+        format="json",
+        HTTP_IDEMPOTENCY_KEY="mobile-project-name-2",
+    )
+    assert created.status_code == 201
+    created_task = Task.objects.get(id=created.data["id"])
+    assert created_task.project is not None
+    assert created_task.project.name == "Household"
+    assert created_task.project.area == Project.Area.PERSONAL

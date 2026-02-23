@@ -7,7 +7,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 
 from core.models import Organization, User
-from tasks.models import Task
+from tasks.models import Project, Task
 
 
 @pytest.mark.django_db
@@ -297,6 +297,47 @@ def test_task_priority_is_optional_and_updatable():
     clear_res = client.patch(f"/tasks/{task_id}/", {"priority": None}, format="json")
     assert clear_res.status_code == 200
     assert clear_res.data["priority"] is None
+
+
+@pytest.mark.django_db
+def test_tasks_accept_project_name_and_upsert_by_name():
+    org = Organization.objects.create(name="Project Name Org")
+    user = User.objects.create_user(email="project-name@example.com", password="StrongPass123!", organization=org)
+    existing_project = Project.objects.create(organization=org, name="Launch Plan", area=Project.Area.WORK)
+
+    token = RefreshToken.for_user(user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
+
+    matched = client.post(
+        "/tasks/",
+        {"title": "Match existing project", "area": "work", "project": " launch plan "},
+        format="json",
+    )
+    assert matched.status_code == 201
+    assert str(matched.data["project"]) == str(existing_project.id)
+    assert Project.objects.filter(organization=org, name__iexact="launch plan").count() == 1
+
+    created = client.post(
+        "/tasks/",
+        {"title": "Create missing project", "area": "personal", "project": "Home Ops"},
+        format="json",
+    )
+    assert created.status_code == 201
+    created_task = Task.objects.get(id=created.data["id"])
+    assert created_task.project is not None
+    assert created_task.project.name == "Home Ops"
+    assert created_task.project.area == Project.Area.PERSONAL
+
+    patched = client.patch(
+        f"/tasks/{created_task.id}/",
+        {"project": "Errands"},
+        format="json",
+    )
+    assert patched.status_code == 200
+    created_task.refresh_from_db()
+    assert created_task.project is not None
+    assert created_task.project.name == "Errands"
 
 
 @pytest.mark.django_db
