@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { PDFWorker, getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 
@@ -895,6 +896,10 @@ function QuickAdd({
   const [creatingProject, setCreatingProject] = useState(false)
   const [error, setError] = useState('')
   const projectPickerRef = useRef(null)
+  const projectInputRef = useRef(null)
+  const projectSuggestionsRef = useRef(null)
+  const [projectSuggestionsStyle, setProjectSuggestionsStyle] = useState(null)
+  const [projectSuggestionsPlacement, setProjectSuggestionsPlacement] = useState('bottom')
   const areaProjects = useMemo(
     () => projects.filter((project) => project.area === area),
     [projects, area]
@@ -957,9 +962,51 @@ function QuickAdd({
     }
   }, [token, area, normalizedQuery, projectMenuOpen])
 
+  useLayoutEffect(() => {
+    if (!projectMenuOpen || !normalizedQuery) {
+      setProjectSuggestionsStyle(null)
+      setProjectSuggestionsPlacement('bottom')
+      return
+    }
+
+    function updateProjectSuggestionsPosition() {
+      if (!projectInputRef.current) {
+        return
+      }
+      const rect = projectInputRef.current.getBoundingClientRect()
+      const viewportPadding = 8
+      const menuGap = 4
+      const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - viewportPadding)
+      const spaceAbove = Math.max(0, rect.top - viewportPadding)
+      const placeAbove = spaceBelow < 180 && spaceAbove > spaceBelow
+      const availableSpace = Math.max(0, (placeAbove ? spaceAbove : spaceBelow) - menuGap)
+      const left = Math.max(viewportPadding, rect.left)
+      const width = Math.max(160, Math.min(rect.width, window.innerWidth - left - viewportPadding))
+      setProjectSuggestionsPlacement(placeAbove ? 'top' : 'bottom')
+      setProjectSuggestionsStyle({
+        left,
+        top: placeAbove ? rect.top - menuGap : rect.bottom + menuGap,
+        width,
+        maxHeight: Math.max(120, Math.min(260, availableSpace)),
+      })
+    }
+
+    updateProjectSuggestionsPosition()
+    window.addEventListener('resize', updateProjectSuggestionsPosition)
+    window.addEventListener('scroll', updateProjectSuggestionsPosition, true)
+    return () => {
+      window.removeEventListener('resize', updateProjectSuggestionsPosition)
+      window.removeEventListener('scroll', updateProjectSuggestionsPosition, true)
+    }
+  }, [projectMenuOpen, normalizedQuery])
+
   useEffect(() => {
     function handleOutsideClick(event) {
-      if (projectPickerRef.current && !projectPickerRef.current.contains(event.target)) {
+      const clickedInsidePicker =
+        projectPickerRef.current && projectPickerRef.current.contains(event.target)
+      const clickedInsideSuggestions =
+        projectSuggestionsRef.current && projectSuggestionsRef.current.contains(event.target)
+      if (!clickedInsidePicker && !clickedInsideSuggestions) {
         setProjectMenuOpen(false)
         setHighlightedProjectIndex(-1)
       }
@@ -1074,6 +1121,49 @@ function QuickAdd({
   const quickAddClassName = ['quick-add', inline ? 'quick-add-inline' : '', className]
     .filter(Boolean)
     .join(' ')
+  const showProjectSuggestions = projectMenuOpen && normalizedQuery
+  const projectSuggestionsMenu = showProjectSuggestions ? (
+    <div
+      ref={projectSuggestionsRef}
+      className={
+        projectSuggestionsPlacement === 'top'
+          ? 'project-suggestions project-suggestions-portal project-suggestions-portal-top'
+          : 'project-suggestions project-suggestions-portal'
+      }
+      style={projectSuggestionsStyle ?? undefined}
+      role="listbox"
+    >
+      {filteredProjects.map((project, index) => (
+        <button
+          key={project.id}
+          type="button"
+          className={
+            highlightedProjectIndex === index
+              ? 'project-suggestion project-suggestion-highlighted'
+              : 'project-suggestion'
+          }
+          onClick={() => selectProject(project)}
+          onMouseEnter={() => setHighlightedProjectIndex(index)}
+          aria-selected={highlightedProjectIndex === index}
+        >
+          {project.name}
+        </button>
+      ))}
+      {!exactMatch && projectQuery.trim() ? (
+        <button
+          type="button"
+          className="project-suggestion project-suggestion-create"
+          onClick={createProjectFromQuery}
+          disabled={creatingProject}
+        >
+          {creatingProject ? 'Creating...' : `Create "${projectQuery.trim()}"`}
+        </button>
+      ) : null}
+      {!filteredProjects.length && loadingProjectSuggestions ? (
+        <div className="project-suggestion project-suggestion-empty">Searching...</div>
+      ) : null}
+    </div>
+  ) : null
 
   return (
     <form className={quickAddClassName} onSubmit={submit}>
@@ -1115,6 +1205,7 @@ function QuickAdd({
       </select>
       <div className="project-picker" ref={projectPickerRef}>
         <input
+          ref={projectInputRef}
           value={projectQuery}
           onChange={(e) => handleProjectInputChange(e.target.value)}
           onFocus={() => setProjectMenuOpen(Boolean(projectQuery.trim()))}
@@ -1122,40 +1213,12 @@ function QuickAdd({
           placeholder="Project (type to search or create)"
           aria-label="Project"
         />
-        {projectMenuOpen && normalizedQuery ? (
-          <div className="project-suggestions" role="listbox">
-            {filteredProjects.map((project, index) => (
-              <button
-                key={project.id}
-                type="button"
-                className={
-                  highlightedProjectIndex === index
-                    ? 'project-suggestion project-suggestion-highlighted'
-                    : 'project-suggestion'
-                }
-                onClick={() => selectProject(project)}
-                onMouseEnter={() => setHighlightedProjectIndex(index)}
-                aria-selected={highlightedProjectIndex === index}
-              >
-                {project.name}
-              </button>
-            ))}
-            {!exactMatch && projectQuery.trim() ? (
-              <button
-                type="button"
-                className="project-suggestion project-suggestion-create"
-                onClick={createProjectFromQuery}
-                disabled={creatingProject}
-              >
-                {creatingProject ? 'Creating...' : `Create "${projectQuery.trim()}"`}
-              </button>
-            ) : null}
-            {!filteredProjects.length && loadingProjectSuggestions ? (
-              <div className="project-suggestion project-suggestion-empty">Searching...</div>
-            ) : null}
-          </div>
-        ) : null}
       </div>
+      {showProjectSuggestions
+        ? typeof document === 'undefined'
+          ? projectSuggestionsMenu
+          : createPortal(projectSuggestionsMenu, document.body)
+        : null}
       <button type="submit">Add</button>
       {error ? <span className="error-text">{error}</span> : null}
     </form>

@@ -1350,17 +1350,23 @@ td {
 }
 
 .project-suggestions {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
   max-height: 220px;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface-2);
-  z-index: 20;
   display: grid;
+}
+
+.project-suggestions-portal {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 80;
+}
+
+.project-suggestions-portal-top {
+  transform: translateY(-100%);
 }
 
 .quick-add .project-suggestion {

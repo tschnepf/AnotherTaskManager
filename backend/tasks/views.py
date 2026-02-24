@@ -19,6 +19,10 @@ from rest_framework.throttling import SimpleRateThrottle
 from ai.semantic import dedupe_candidates, semantic_search_with_fallback
 from core.models import Organization
 from core.security import verify_inbound_ingest_token
+from mobile_api.notifications import (
+    enqueue_task_change_sync_notifications,
+    trigger_pending_notification_processing,
+)
 from tasks.attachments import (
     BLOCKED_UPLOAD_EXTENSIONS,
     FORCE_DOWNLOAD_EXTENSIONS,
@@ -285,7 +289,7 @@ class TaskViewSet(OrgScopedQuerysetMixin, viewsets.ModelViewSet):
             Task.objects.bulk_update(updates, ["position", "updated_at"])
 
             def _emit_reorder_events():
-                TaskChangeEvent.objects.bulk_create(
+                created_events = TaskChangeEvent.objects.bulk_create(
                     [
                         TaskChangeEvent(
                             organization=task.organization,
@@ -296,6 +300,14 @@ class TaskViewSet(OrgScopedQuerysetMixin, viewsets.ModelViewSet):
                         for index, task_id in enumerate(ordered_ids, start=1)
                     ]
                 )
+                if created_events:
+                    enqueue_task_change_sync_notifications(
+                        organization=task.organization,
+                        event_id=created_events[-1].id,
+                        event_type=TaskChangeEvent.EventType.UPDATED,
+                        task_id=str(task.id),
+                    )
+                    trigger_pending_notification_processing()
 
             transaction.on_commit(_emit_reorder_events)
 

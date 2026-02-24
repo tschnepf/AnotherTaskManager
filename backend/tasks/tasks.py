@@ -5,6 +5,10 @@ from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
 
+from mobile_api.notifications import (
+    enqueue_task_change_sync_notifications,
+    trigger_pending_notification_processing,
+)
 from tasks.models import Task, TaskChangeEvent
 
 
@@ -39,7 +43,7 @@ def archive_completed_tasks(organization_id: str | None = None):
         }
 
         def _emit_events():
-            TaskChangeEvent.objects.bulk_create(
+            created_events = TaskChangeEvent.objects.bulk_create(
                 [
                     TaskChangeEvent(
                         organization_id=org_ids_by_task.get(str(task_id)),
@@ -51,6 +55,19 @@ def archive_completed_tasks(organization_id: str | None = None):
                     if org_ids_by_task.get(str(task_id))
                 ]
             )
+            if created_events:
+                notified_orgs: set[str] = set()
+                for event in reversed(created_events):
+                    org_id = str(event.organization_id)
+                    if org_id in notified_orgs:
+                        continue
+                    enqueue_task_change_sync_notifications(
+                        organization=org_id,
+                        event_id=event.id,
+                        event_type=TaskChangeEvent.EventType.ARCHIVED,
+                    )
+                    notified_orgs.add(org_id)
+                trigger_pending_notification_processing()
 
         transaction.on_commit(_emit_events)
     return {

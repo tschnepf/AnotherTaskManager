@@ -7,7 +7,12 @@ from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from django.utils import timezone
 
-from mobile_api.notifications import cancel_notifications_for_task, refresh_task_due_notifications
+from mobile_api.notifications import (
+    cancel_notifications_for_task,
+    enqueue_task_change_sync_notifications,
+    refresh_task_due_notifications,
+    trigger_pending_notification_processing,
+)
 from tasks.models import Task, TaskChangeEvent
 
 
@@ -37,12 +42,19 @@ def task_saved_emit_event(sender, instance: Task, created: bool, **kwargs):
     event_type = TaskChangeEvent.EventType.CREATED if created else TaskChangeEvent.EventType.UPDATED
 
     def _create_event():
-        TaskChangeEvent.objects.create(
+        event = TaskChangeEvent.objects.create(
             organization=instance.organization,
             event_type=event_type,
             task_id=instance.id,
             payload_summary=_summary_from_task(instance),
         )
+        enqueue_task_change_sync_notifications(
+            organization=instance.organization,
+            event_id=event.id,
+            event_type=event_type,
+            task_id=str(instance.id),
+        )
+        trigger_pending_notification_processing()
 
     transaction.on_commit(_create_event)
     transaction.on_commit(lambda: refresh_task_due_notifications(instance))
@@ -54,12 +66,19 @@ def task_deleted_emit_event(sender, instance: Task, **kwargs):
     organization = instance.organization
 
     def _create_event():
-        TaskChangeEvent.objects.create(
+        event = TaskChangeEvent.objects.create(
             organization=organization,
             event_type=TaskChangeEvent.EventType.DELETED,
             task_id=deleted_task_id,
             payload_summary=_summary_from_task(instance),
         )
+        enqueue_task_change_sync_notifications(
+            organization=organization,
+            event_id=event.id,
+            event_type=TaskChangeEvent.EventType.DELETED,
+            task_id=str(deleted_task_id),
+        )
+        trigger_pending_notification_processing()
 
     transaction.on_commit(_create_event)
     transaction.on_commit(lambda: cancel_notifications_for_task(str(deleted_task_id)))

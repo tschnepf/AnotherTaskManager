@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import timedelta
 import os
 import sys
 from urllib.parse import urlparse
@@ -219,6 +220,12 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(
+        minutes=int(os.getenv("JWT_ACCESS_TOKEN_LIFETIME_MINUTES", "5"))
+    ),
+    "REFRESH_TOKEN_LIFETIME": timedelta(
+        days=int(os.getenv("JWT_REFRESH_TOKEN_LIFETIME_DAYS", "1"))
+    ),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
 }
@@ -315,6 +322,14 @@ MOBILE_IDEMPOTENCY_TTL_HOURS = int(os.getenv("MOBILE_IDEMPOTENCY_TTL_HOURS", "24
 MOBILE_NOTIFICATION_DELIVERY_RETENTION_DAYS = int(
     os.getenv("MOBILE_NOTIFICATION_DELIVERY_RETENTION_DAYS", "30")
 )
+MOBILE_TASK_CHANGE_PUSH_ENABLED = _env_bool("MOBILE_TASK_CHANGE_PUSH_ENABLED", True)
+MOBILE_TASK_CHANGE_PUSH_DEDUPE_WINDOW_SECONDS = int(
+    os.getenv("MOBILE_TASK_CHANGE_PUSH_DEDUPE_WINDOW_SECONDS", "10")
+)
+MOBILE_TASK_CHANGE_PUSH_PROCESS_BATCH_SIZE = int(
+    os.getenv("MOBILE_TASK_CHANGE_PUSH_PROCESS_BATCH_SIZE", "200")
+)
+MOBILE_TASK_CHANGE_PUSH_TRIGGER_ASYNC = _env_bool("MOBILE_TASK_CHANGE_PUSH_TRIGGER_ASYNC", True)
 APNS_ENABLED = _env_bool("APNS_ENABLED", False)
 APNS_KEY_ID = str(os.getenv("APNS_KEY_ID", "")).strip()
 APNS_TEAM_ID = str(os.getenv("APNS_TEAM_ID", "")).strip()

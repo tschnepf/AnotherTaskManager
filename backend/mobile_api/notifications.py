@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+import logging
 
 from django.conf import settings
 from django.db import transaction
@@ -10,6 +11,8 @@ from django.utils import timezone
 
 from mobile_api.apns import APNSConfigError, is_dead_token_failure, send_push_notification
 from mobile_api.models import MobileDevice, NotificationDelivery, NotificationPreference
+
+logger = logging.getLogger(__name__)
 
 
 def _max_attempts() -> int:
@@ -39,6 +42,22 @@ def _task_reminder_prefix(task_id: str) -> str:
     return f"task-reminder:{task_id}:"
 
 
+def _task_change_push_enabled() -> bool:
+    return (
+        bool(getattr(settings, "MOBILE_API_ENABLED", False))
+        and bool(getattr(settings, "APNS_ENABLED", False))
+        and bool(getattr(settings, "MOBILE_TASK_CHANGE_PUSH_ENABLED", True))
+    )
+
+
+def _task_change_push_dedupe_window_seconds() -> int:
+    return max(1, int(getattr(settings, "MOBILE_TASK_CHANGE_PUSH_DEDUPE_WINDOW_SECONDS", 10)))
+
+
+def _task_change_push_batch_size() -> int:
+    return max(1, int(getattr(settings, "MOBILE_TASK_CHANGE_PUSH_PROCESS_BATCH_SIZE", 200)))
+
+
 def enqueue_notification(
     *,
     device: MobileDevice,
@@ -57,6 +76,66 @@ def enqueue_notification(
         },
     )
     return delivery
+
+
+def enqueue_task_change_sync_notifications(
+    *,
+    organization,
+    event_id: int | None = None,
+    event_type: str = "",
+    task_id: str | None = None,
+) -> int:
+    if not _task_change_push_enabled():
+        return 0
+
+    org_id = str(getattr(organization, "id", organization))
+    devices = MobileDevice.objects.filter(organization_id=org_id).only("id", "organization_id", "user_id")
+    if not devices.exists():
+        return 0
+
+    dedupe_window_seconds = _task_change_push_dedupe_window_seconds()
+    bucket = int(timezone.now().timestamp()) // dedupe_window_seconds
+    created_count = 0
+    for device in devices:
+        dedupe_key = f"task-sync:{org_id}:{device.id}:{bucket}"
+        payload = {
+            "type": "task_change_sync_hint",
+            "organization_id": org_id,
+            "event_type": str(event_type or ""),
+            "task_id": str(task_id) if task_id else None,
+            "cursor_hint": str(event_id) if event_id is not None else None,
+        }
+        _, created = NotificationDelivery.objects.get_or_create(
+            dedupe_key=dedupe_key,
+            defaults={
+                "organization_id": device.organization_id,
+                "user_id": device.user_id,
+                "device": device,
+                "payload": payload,
+                "available_at": timezone.now(),
+            },
+        )
+        if created:
+            created_count += 1
+    return created_count
+
+
+def trigger_pending_notification_processing(batch_size: int | None = None) -> bool:
+    if not _task_change_push_enabled():
+        return False
+    if not bool(getattr(settings, "MOBILE_TASK_CHANGE_PUSH_TRIGGER_ASYNC", True)):
+        return False
+
+    effective_batch_size = max(1, int(batch_size or _task_change_push_batch_size()))
+
+    try:
+        from mobile_api.tasks import process_pending_notifications
+
+        process_pending_notifications.apply_async(kwargs={"batch_size": effective_batch_size}, retry=False)
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("failed to trigger async mobile notification processing", exc_info=True)
+        return False
 
 
 def cancel_notifications_for_task(task_id: str) -> int:

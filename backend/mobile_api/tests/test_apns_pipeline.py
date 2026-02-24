@@ -6,6 +6,7 @@ from mobile_api.apns import APNSDeliveryResult
 from mobile_api.models import MobileDevice, NotificationDelivery
 from mobile_api.notifications import enqueue_notification
 from mobile_api.tasks import process_pending_notifications
+from tasks.models import Task
 
 
 def _make_device(user, org, token: str, installation_id: str = "install-1") -> MobileDevice:
@@ -74,3 +75,47 @@ def test_apns_pipeline_cleans_dead_tokens(monkeypatch):
     delivery = NotificationDelivery.objects.get(dedupe_key="push-dead")
     assert delivery.state == NotificationDelivery.State.CANCELED
     assert not MobileDevice.objects.filter(id=device.id).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(
+    MOBILE_API_ENABLED=True,
+    APNS_ENABLED=True,
+    APNS_KEY_ID="key-id",
+    APNS_TEAM_ID="team-id",
+    APNS_BUNDLE_ID="com.example.taskhub",
+    APNS_PRIVATE_KEY_B64="ZmFrZQ==",
+    APNS_PROVIDER="mock",
+    MOBILE_TASK_CHANGE_PUSH_ENABLED=True,
+    MOBILE_TASK_CHANGE_PUSH_DEDUPE_WINDOW_SECONDS=3600,
+    MOBILE_TASK_CHANGE_PUSH_TRIGGER_ASYNC=False,
+)
+def test_task_changes_enqueue_sync_hint_notifications_with_dedupe():
+    org = Organization.objects.create(name="Org")
+    owner = User.objects.create_user(email="owner@example.com", password="StrongPass123!", organization=org)
+    teammate = User.objects.create_user(email="teammate@example.com", password="StrongPass123!", organization=org)
+    _make_device(owner, org, token="sync-token-owner", installation_id="sync-owner")
+    _make_device(teammate, org, token="sync-token-teammate", installation_id="sync-teammate")
+
+    Task.objects.create(
+        organization=org,
+        created_by_user=owner,
+        title="First task",
+        area=Task.Area.WORK,
+    )
+    deliveries = list(NotificationDelivery.objects.all())
+    sync_hints = [delivery for delivery in deliveries if (delivery.payload or {}).get("type") == "task_change_sync_hint"]
+    assert len(sync_hints) == 2
+    assert all(str(delivery.dedupe_key).startswith("task-sync:") for delivery in sync_hints)
+
+    Task.objects.create(
+        organization=org,
+        created_by_user=owner,
+        title="Second task",
+        area=Task.Area.WORK,
+    )
+    deliveries_after = list(NotificationDelivery.objects.all())
+    sync_hints_after = [
+        delivery for delivery in deliveries_after if (delivery.payload or {}).get("type") == "task_change_sync_hint"
+    ]
+    assert len(sync_hints_after) == 2
