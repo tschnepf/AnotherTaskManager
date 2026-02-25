@@ -7,6 +7,7 @@ celery
 redis
 pgvector
 cryptography
+httpx[http2]
 pytest
 pytest-django
 ruff

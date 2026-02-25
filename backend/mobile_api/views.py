@@ -31,6 +31,7 @@ from mobile_api.permissions import (
 )
 from mobile_api.serializers import (
     MobileDeviceSerializer,
+    MobileTaskDetailSerializer,
     MobileMetaSerializer,
     MobileTaskSerializer,
     NotificationPreferenceSerializer,
@@ -289,7 +290,7 @@ class MobileTaskDetailView(MobileEnabledAPIView):
 
     def get(self, request, task_id):
         task = self._task(task_id)
-        serializer = MobileTaskSerializer(task)
+        serializer = MobileTaskDetailSerializer(task)
         return Response(serializer.data)
 
     def patch(self, request, task_id):
@@ -297,7 +298,7 @@ class MobileTaskDetailView(MobileEnabledAPIView):
         serializer = TaskSerializer(task, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         task = serializer.save()
-        return Response(MobileTaskSerializer(task).data)
+        return Response(MobileTaskDetailSerializer(task).data)
 
     def delete(self, request, task_id):
         task = self._task(task_id)

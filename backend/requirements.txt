@@ -6,6 +6,8 @@
 #
 amqp==5.3.1
     # via kombu
+anyio==4.12.1
+    # via httpx
 asgiref==3.11.1
     # via
     #   django
@@ -18,12 +20,15 @@ cachecontrol[filecache]==0.14.4
     # via
     #   cachecontrol
     #   pip-audit
-cffi==2.0.0
-    # via cryptography
 celery==5.6.2
     # via -r backend/requirements.in
 certifi==2026.1.4
-    # via requests
+    # via
+    #   httpcore
+    #   httpx
+    #   requests
+cffi==2.0.0
+    # via cryptography
 charset-normalizer==3.4.4
     # via requests
 click==8.3.1
@@ -38,10 +43,10 @@ click-plugins==1.1.1.2
     # via celery
 click-repl==0.3.0
     # via celery
-cyclonedx-python-lib==11.6.0
-    # via pip-audit
 cryptography==46.0.5
     # via -r backend/requirements.in
+cyclonedx-python-lib==11.6.0
+    # via pip-audit
 defusedxml==0.7.1
     # via py-serializable
 django==6.0.2
@@ -60,8 +65,23 @@ djangorestframework-simplejwt==5.5.1
     # via -r backend/requirements.in
 filelock==3.21.2
     # via cachecontrol
+h11==0.16.0
+    # via httpcore
+h2==4.3.0
+    # via httpx
+hpack==4.1.0
+    # via h2
+httpcore==1.0.9
+    # via httpx
+httpx[http2]==0.28.1
+    # via -r backend/requirements.in
+hyperframe==6.1.0
+    # via h2
 idna==3.11
-    # via requests
+    # via
+    #   anyio
+    #   httpx
+    #   requests
 iniconfig==2.3.0
     # via pytest
 kombu==5.6.2
@@ -104,14 +124,14 @@ psycopg-binary==3.3.2
     # via psycopg
 py-serializable==2.1.0
     # via cyclonedx-python-lib
+pycparser==3.0
+    # via cffi
 pygments==2.19.2
     # via
     #   pytest
     #   rich
 pyjwt==2.11.0
     # via djangorestframework-simplejwt
-pycparser==3.0
-    # via cffi
 pyparsing==3.3.2
     # via pip-requirements-parser
 pytest==9.0.2
