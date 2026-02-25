@@ -13,7 +13,7 @@ from mobile_api.notifications import (
     refresh_task_due_notifications,
     trigger_pending_notification_processing,
 )
-from tasks.models import Task, TaskChangeEvent
+from tasks.models import Project, Task, TaskChangeEvent
 
 
 def _mobile_datetime(value):
@@ -27,6 +27,14 @@ def _mobile_datetime(value):
 
 
 def _summary_from_task(task: Task) -> dict:
+    project_name = None
+    if task.project_id is not None:
+        cached_project = task._state.fields_cache.get("project")
+        if cached_project is not None:
+            project_name = cached_project.name
+        else:
+            project_name = Project.objects.filter(id=task.project_id).values_list("name", flat=True).first()
+
     return {
         "title": task.title,
         "is_completed": task.status in {Task.Status.DONE, Task.Status.ARCHIVED},
@@ -34,6 +42,8 @@ def _summary_from_task(task: Task) -> dict:
         "priority": task.priority,
         "due_at": _mobile_datetime(task.due_at),
         "updated_at": _mobile_datetime(task.updated_at),
+        "project": str(task.project_id) if task.project_id is not None else None,
+        "project_name": project_name,
     }
 
 

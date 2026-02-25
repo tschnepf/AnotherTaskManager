@@ -34,6 +34,8 @@ def test_mobile_task_crud_and_cross_tenant_404():
     assert detail.data["status"] == "inbox"
     assert detail.data["recurrence"] == "none"
     assert detail.data["priority"] is None
+    assert detail.data["project"] is None
+    assert detail.data["project_name"] is None
 
     patch = client.patch(
         f"/api/mobile/v1/tasks/{task_id}",
@@ -45,8 +47,14 @@ def test_mobile_task_crud_and_cross_tenant_404():
     assert patch.data["priority"] == 3
     assert patch.data["area"] == "personal"
     assert isinstance(patch.data["project"], str)
+    assert patch.data["project_name"] == "ADC"
     assert "." not in patch.data["updated_at"]
     assert patch.data["updated_at"].endswith("Z")
+
+    detail_after = client.get(f"/api/mobile/v1/tasks/{task_id}")
+    assert detail_after.status_code == 200
+    assert detail_after.data["project"] == patch.data["project"]
+    assert detail_after.data["project_name"] == "ADC"
 
     tenant_b_task = Task.objects.create(
         organization=org_b,

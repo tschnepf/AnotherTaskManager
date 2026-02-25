@@ -54,8 +54,12 @@ def test_mobile_session_tasks_idempotency_and_delta_sync():
     assert list_res.status_code == 200
     assert isinstance(list_res.data, list)
     assert list_res.data
-    assert {"id", "title", "is_completed", "due_at", "updated_at"}.issubset(set(list_res.data[0].keys()))
+    assert {"id", "title", "is_completed", "due_at", "updated_at", "project", "project_name"}.issubset(
+        set(list_res.data[0].keys())
+    )
     assert isinstance(list_res.data[0]["is_completed"], bool)
+    assert list_res.data[0]["project"] is None
+    assert list_res.data[0]["project_name"] is None
     if list_res.data[0]["due_at"]:
         assert "." not in list_res.data[0]["due_at"]
         assert list_res.data[0]["due_at"].endswith("Z")
@@ -75,8 +79,10 @@ def test_mobile_session_tasks_idempotency_and_delta_sync():
         assert parse_datetime(delta_res.data["events"][0]["occurred_at"]) is not None
         assert delta_res.data["events"][0]["event_type"] in {"task.created", "task.updated", "task.deleted"}
         summary = delta_res.data["events"][0].get("payload_summary") or {}
-        assert {"title", "is_completed", "due_at", "updated_at"}.issubset(summary.keys())
+        assert {"title", "is_completed", "due_at", "updated_at", "project", "project_name"}.issubset(summary.keys())
         assert isinstance(summary["is_completed"], bool)
+        assert summary["project"] is None
+        assert summary["project_name"] is None
         due_at = summary.get("due_at")
         if due_at:
             assert "." not in due_at

@@ -24,6 +24,16 @@
 14. `POST /intents/create-task` (requires `Idempotency-Key`)
 15. `GET /widget/snapshot`
 
+## Task payloads
+1. `GET /tasks` summary items include:
+   - `id`, `title`, `is_completed`, `due_at`, `updated_at`, `project`, `project_name`
+2. `GET/PATCH /tasks/{id}` detail payload includes:
+   - `id`, `title`, `description`, `notes`, `attachments`, `intent`, `area`, `project`, `project_name`,
+     `status`, `priority`, `due_at`, `recurrence`, `completed_at`, `position`, `created_at`, `updated_at`,
+     `is_completed`
+3. Delta event `payload_summary` includes:
+   - `title`, `is_completed`, `due_at`, `updated_at`, `project`, `project_name`
+
 ## Error envelope
 All non-2xx responses return:
 ```json

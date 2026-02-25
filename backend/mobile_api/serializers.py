@@ -200,12 +200,14 @@ class MobileTaskCreateSerializer(TaskSerializer):
 
 class MobileTaskSerializer(serializers.ModelSerializer):
     is_completed = serializers.SerializerMethodField()
+    project = serializers.UUIDField(source="project_id", allow_null=True, read_only=True)
+    project_name = serializers.CharField(source="project.name", allow_null=True, read_only=True)
     due_at = MobileDateTimeField(allow_null=True, required=False)
     updated_at = MobileDateTimeField()
 
     class Meta:
         model = Task
-        fields = ["id", "title", "is_completed", "due_at", "updated_at"]
+        fields = ["id", "title", "is_completed", "due_at", "updated_at", "project", "project_name"]
 
     def get_is_completed(self, instance: Task) -> bool:
         return instance.status in {Task.Status.DONE, Task.Status.ARCHIVED}
@@ -214,6 +216,7 @@ class MobileTaskSerializer(serializers.ModelSerializer):
 class MobileTaskDetailSerializer(serializers.ModelSerializer):
     is_completed = serializers.SerializerMethodField()
     project = serializers.UUIDField(source="project_id", allow_null=True, read_only=True)
+    project_name = serializers.CharField(source="project.name", allow_null=True, read_only=True)
     due_at = MobileDateTimeField(allow_null=True, required=False)
     completed_at = MobileDateTimeField(allow_null=True, required=False)
     created_at = MobileDateTimeField()
@@ -230,6 +233,7 @@ class MobileTaskDetailSerializer(serializers.ModelSerializer):
             "intent",
             "area",
             "project",
+            "project_name",
             "status",
             "priority",
             "due_at",

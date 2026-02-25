@@ -1,7 +1,10 @@
+import logging
 from uuid import uuid4
 
 from rest_framework.views import exception_handler
 from rest_framework import status
+
+logger = logging.getLogger(__name__)
 
 
 def _mobile_error_code(exc, response) -> str:
@@ -74,6 +77,17 @@ def api_exception_handler(exc, context):
             },
             "request_id": request_id or str(uuid4()),
         }
+        logger.warning(
+            "mobile_api_non_2xx",
+            extra={
+                "status_code": response.status_code,
+                "method": request.method if request else "",
+                "path": request_path,
+                "request_id": response.data["request_id"],
+                "error_code": response.data["error"]["code"],
+                "error_payload": response.data,
+            },
+        )
         return response
 
     payload = {

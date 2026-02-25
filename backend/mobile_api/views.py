@@ -115,6 +115,15 @@ def _coerce_mobile_datetime(value: Any) -> str | None:
     return _mobile_datetime(value)
 
 
+def _coerce_uuid_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    return str(value)
+
+
 def _mobile_event_type(event_type: str) -> str:
     mapping = {
         TaskChangeEvent.EventType.CREATED: "task.created",
@@ -150,11 +159,22 @@ def _mobile_payload_summary(event: TaskChangeEvent, task: Task | None) -> dict[s
     if updated_at is None:
         updated_at = event.occurred_at
 
+    project = raw.get("project")
+    if project is None and task is not None:
+        project = task.project_id
+
+    project_name = raw.get("project_name")
+    if project_name is None and task is not None and task.project_id is not None:
+        project_obj = getattr(task, "project", None)
+        project_name = getattr(project_obj, "name", None)
+
     summary: dict[str, Any] = {
         "title": str(title or ""),
         "is_completed": _coerce_bool(is_completed, default=False),
         "due_at": _coerce_mobile_datetime(due_at),
         "updated_at": _coerce_mobile_datetime(updated_at),
+        "project": _coerce_uuid_str(project),
+        "project_name": str(project_name) if project_name is not None else None,
     }
     for key, value in raw.items():
         if key not in summary:
@@ -251,7 +271,7 @@ class MobileTaskListCreateView(MobileEnabledAPIView):
     }
 
     def get(self, request):
-        queryset = Task.objects.filter(organization=self._org()).order_by("position", "-created_at")
+        queryset = Task.objects.filter(organization=self._org()).select_related("project").order_by("position", "-created_at")
         limit_raw = request.query_params.get("limit")
         if limit_raw:
             try:
@@ -286,7 +306,7 @@ class MobileTaskDetailView(MobileEnabledAPIView):
     }
 
     def _task(self, task_id):
-        return get_object_or_404(Task, id=task_id, organization=self._org())
+        return get_object_or_404(Task.objects.select_related("project"), id=task_id, organization=self._org())
 
     def get(self, request, task_id):
         task = self._task(task_id)
@@ -355,12 +375,16 @@ class MobileDeltaSyncView(MobileEnabledAPIView):
         task_ids = [event.task_id for event in events if event.task_id is not None]
         tasks_by_id = {
             task.id: task
-            for task in Task.objects.filter(organization=org, id__in=task_ids).only(
+            for task in Task.objects.filter(organization=org, id__in=task_ids)
+            .select_related("project")
+            .only(
                 "id",
                 "title",
                 "status",
                 "due_at",
                 "updated_at",
+                "project_id",
+                "project__name",
             )
         }
         next_cursor = encode_cursor(events[-1].id if events else cursor_id)
