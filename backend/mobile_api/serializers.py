@@ -13,7 +13,7 @@ from mobile_api.models import (
     OIDCIdentity,
     UserMobilePreference,
 )
-from tasks.models import Task
+from tasks.models import Project, Task
 from tasks.serializers import TaskSerializer
 
 
@@ -259,6 +259,12 @@ class MobileTaskDetailSerializer(serializers.ModelSerializer):
 
     def get_is_completed(self, instance: Task) -> bool:
         return instance.status in {Task.Status.DONE, Task.Status.ARCHIVED}
+
+
+class MobileProjectSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Project
+        fields = ["id", "name"]
 
 
 class WidgetTaskSerializer(serializers.ModelSerializer):

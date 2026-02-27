@@ -10,6 +10,7 @@ from mobile_api.views import (
     MobileIdentityLinkDetailView,
     MobileIdentityLinkListCreateView,
     MobileMetaView,
+    MobileProjectListCreateView,
     MobileSessionView,
     MobileTaskDetailView,
     MobileTaskListCreateView,
@@ -20,6 +21,7 @@ from mobile_api.views import (
 urlpatterns = [
     path("meta", MobileMetaView.as_view()),
     path("session", MobileSessionView.as_view()),
+    path("projects", MobileProjectListCreateView.as_view()),
     path("tasks", MobileTaskListCreateView.as_view()),
     path("tasks/<uuid:task_id>", MobileTaskDetailView.as_view()),
     path("sync/delta", MobileDeltaSyncView.as_view()),

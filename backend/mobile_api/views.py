@@ -31,6 +31,7 @@ from mobile_api.permissions import (
 )
 from mobile_api.serializers import (
     MobileDeviceSerializer,
+    MobileProjectSerializer,
     MobileTaskDetailSerializer,
     MobileMetaSerializer,
     MobileTaskSerializer,
@@ -44,7 +45,7 @@ from mobile_api.serializers import (
 )
 from mobile_api.sync import decode_cursor, encode_cursor
 from mobile_api.throttles import MobileAuthRateThrottle, MobileIntentRateThrottle, MobileSyncRateThrottle
-from tasks.models import Task, TaskChangeEvent
+from tasks.models import Project, Task, TaskChangeEvent
 from tasks.serializers import TaskSerializer
 
 
@@ -315,7 +316,11 @@ class MobileTaskDetailView(MobileEnabledAPIView):
 
     def patch(self, request, task_id):
         task = self._task(task_id)
-        serializer = TaskSerializer(task, data=request.data, partial=True, context={"request": request})
+        payload = dict(request.data)
+        if "is_completed" in payload and "status" not in payload:
+            completed = _coerce_bool(payload.get("is_completed"), default=False)
+            payload["status"] = Task.Status.DONE if completed else Task.Status.NEXT
+        serializer = TaskSerializer(task, data=payload, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         task = serializer.save()
         return Response(MobileTaskDetailSerializer(task).data)
@@ -403,6 +408,49 @@ class MobileDeltaSyncView(MobileEnabledAPIView):
             )
 
         return Response({"events": payload_events, "next_cursor": next_cursor})
+
+
+class MobileProjectListCreateView(MobileEnabledAPIView):
+    required_scopes_by_method = {
+        "GET": {"mobile.read"},
+        "POST": {"mobile.write"},
+    }
+
+    def get(self, request):
+        queryset = Project.objects.filter(organization=self._org()).order_by("name")
+        name_filter = str(request.query_params.get("name") or "").strip()
+        if name_filter:
+            queryset = queryset.filter(name__iexact=name_filter)
+        serializer = MobileProjectSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        raw_name = str(request.data.get("name") or "").strip()
+        if not raw_name:
+            return Response(
+                {
+                    "error": {
+                        "code": "validation_error",
+                        "message": "name is required",
+                        "details": {"name": ["This field is required."]},
+                    },
+                    "request_id": request_id_from_headers(request.headers),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing = Project.objects.filter(organization=self._org(), name__iexact=raw_name).first()
+        if existing is not None:
+            return Response(MobileProjectSerializer(existing).data)
+
+        raw_area = str(request.data.get("area") or "").strip().lower()
+        area = raw_area if raw_area in {Task.Area.WORK, Task.Area.PERSONAL} else Task.Area.WORK
+        project = Project.objects.create(
+            organization=self._org(),
+            name=raw_name,
+            area=area,
+        )
+        return Response(MobileProjectSerializer(project).data, status=status.HTTP_201_CREATED)
 
 
 class MePreferenceView(MobileEnabledAPIView):

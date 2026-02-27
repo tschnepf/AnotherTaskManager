@@ -50,6 +50,30 @@ def test_mobile_session_tasks_idempotency_and_delta_sync():
     assert conflict_res.status_code == 409
     assert conflict_res.data["error"]["code"] == "idempotency_conflict"
 
+    complete_res = client.patch(f"/api/mobile/v1/tasks/{first_task_id}", {"is_completed": True}, format="json")
+    assert complete_res.status_code == 200
+    assert complete_res.data["is_completed"] is True
+    assert complete_res.data["status"] == "done"
+
+    reopen_res = client.patch(f"/api/mobile/v1/tasks/{first_task_id}", {"is_completed": False}, format="json")
+    assert reopen_res.status_code == 200
+    assert reopen_res.data["is_completed"] is False
+    assert reopen_res.data["status"] == "next"
+
+    list_projects_res = client.get("/api/mobile/v1/projects")
+    assert list_projects_res.status_code == 200
+    assert isinstance(list_projects_res.data, list)
+
+    create_project_res = client.post("/api/mobile/v1/projects", {"name": "iOS Project"}, format="json")
+    assert create_project_res.status_code == 201
+    assert create_project_res.data["name"] == "iOS Project"
+
+    find_project_res = client.get("/api/mobile/v1/projects", {"name": "iOS Project"})
+    assert find_project_res.status_code == 200
+    assert isinstance(find_project_res.data, list)
+    assert find_project_res.data
+    assert find_project_res.data[0]["name"] == "iOS Project"
+
     list_res = client.get("/api/mobile/v1/tasks")
     assert list_res.status_code == 200
     assert isinstance(list_res.data, list)
