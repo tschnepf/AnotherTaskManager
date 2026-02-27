@@ -55,11 +55,23 @@ class OIDCIdentitySerializer(serializers.ModelSerializer):
 
 
 class UserMobilePreferenceSerializer(serializers.ModelSerializer):
+    work_area_text_color = serializers.RegexField(
+        regex=r"^#[0-9a-fA-F]{6}$",
+        error_messages={"invalid": "must be a 6-digit hex color like #93c5fd"},
+    )
+    personal_area_text_color = serializers.RegexField(
+        regex=r"^#[0-9a-fA-F]{6}$",
+        error_messages={"invalid": "must be a 6-digit hex color like #86efac"},
+    )
+
     class Meta:
         model = UserMobilePreference
         fields = [
             "default_task_sort",
             "show_completed_default",
+            "area_text_coloring_enabled",
+            "work_area_text_color",
+            "personal_area_text_color",
             "start_of_week",
             "widget_show_due_only",
             "updated_at",

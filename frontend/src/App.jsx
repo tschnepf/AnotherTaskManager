@@ -110,6 +110,9 @@ const DEFAULT_APP_SETTINGS = Object.freeze({
   taskList: {
     defaultArea: 'all',
     groupByPriorityDefault: false,
+    areaTextColoringEnabled: false,
+    workTextColor: '#93c5fd',
+    personalTextColor: '#86efac',
   },
 })
 
@@ -120,6 +123,14 @@ function cloneDefaultAppSettings() {
     ai: { ...DEFAULT_APP_SETTINGS.ai },
     taskList: { ...DEFAULT_APP_SETTINGS.taskList },
   }
+}
+
+function normalizeHexColor(value, fallback) {
+  const normalized = String(value || '').trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(normalized)) {
+    return normalized.toLowerCase()
+  }
+  return fallback
 }
 
 function loadAppSettings() {
@@ -233,6 +244,18 @@ function loadAppSettings() {
           typeof parsed.taskList?.groupByPriorityDefault === 'boolean'
             ? parsed.taskList.groupByPriorityDefault
             : defaults.taskList.groupByPriorityDefault,
+        areaTextColoringEnabled:
+          typeof parsed.taskList?.areaTextColoringEnabled === 'boolean'
+            ? parsed.taskList.areaTextColoringEnabled
+            : defaults.taskList.areaTextColoringEnabled,
+        workTextColor: normalizeHexColor(
+          parsed.taskList?.workTextColor,
+          defaults.taskList.workTextColor
+        ),
+        personalTextColor: normalizeHexColor(
+          parsed.taskList?.personalTextColor,
+          defaults.taskList.personalTextColor
+        ),
       },
     }
   } catch {
@@ -265,6 +288,19 @@ function saveAppSettings(settings) {
       imapSearchCriteria: settings.emailCapture?.imapSearchCriteria || 'UNSEEN',
       imapMarkSeenOnSuccess: settings.emailCapture?.imapMarkSeenOnSuccess !== false,
       rotateToken: false,
+    },
+    taskList: {
+      defaultArea: settings.taskList?.defaultArea || 'all',
+      groupByPriorityDefault: Boolean(settings.taskList?.groupByPriorityDefault),
+      areaTextColoringEnabled: Boolean(settings.taskList?.areaTextColoringEnabled),
+      workTextColor: normalizeHexColor(
+        settings.taskList?.workTextColor,
+        DEFAULT_APP_SETTINGS.taskList.workTextColor
+      ),
+      personalTextColor: normalizeHexColor(
+        settings.taskList?.personalTextColor,
+        DEFAULT_APP_SETTINGS.taskList.personalTextColor
+      ),
     },
   }
   window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(persisted))
@@ -1767,6 +1803,39 @@ function SettingsPage({
           />
           <span>Default to grouped-by-priority task list</span>
         </label>
+        <label className="settings-checkbox" htmlFor="settings-area-text-coloring-enabled">
+          <input
+            id="settings-area-text-coloring-enabled"
+            type="checkbox"
+            checked={settingsDraft.taskList.areaTextColoringEnabled}
+            onChange={(event) =>
+              onUpdateSetting('taskList', 'areaTextColoringEnabled', event.target.checked)
+            }
+          />
+          <span>Color task text by area in the main list</span>
+        </label>
+        <div className="settings-color-grid">
+          <label className="settings-field" htmlFor="settings-work-text-color">
+            <span>Work text color</span>
+            <input
+              id="settings-work-text-color"
+              type="color"
+              value={settingsDraft.taskList.workTextColor}
+              disabled={!settingsDraft.taskList.areaTextColoringEnabled}
+              onChange={(event) => onUpdateSetting('taskList', 'workTextColor', event.target.value)}
+            />
+          </label>
+          <label className="settings-field" htmlFor="settings-personal-text-color">
+            <span>Personal text color</span>
+            <input
+              id="settings-personal-text-color"
+              type="color"
+              value={settingsDraft.taskList.personalTextColor}
+              disabled={!settingsDraft.taskList.areaTextColoringEnabled}
+              onChange={(event) => onUpdateSetting('taskList', 'personalTextColor', event.target.value)}
+            />
+          </label>
+        </div>
       </div>
     )
   }
@@ -1857,6 +1926,19 @@ function Dashboard({ token, onLogout }) {
   const [groupByPriority, setGroupByPriority] = useState(
     () => initialSettings.taskList.groupByPriorityDefault
   )
+  const [areaTextColoringEnabled, setAreaTextColoringEnabled] = useState(
+    () => initialSettings.taskList.areaTextColoringEnabled
+  )
+  const [areaTextColors, setAreaTextColors] = useState(() => ({
+    work: normalizeHexColor(
+      initialSettings.taskList.workTextColor,
+      DEFAULT_APP_SETTINGS.taskList.workTextColor
+    ),
+    personal: normalizeHexColor(
+      initialSettings.taskList.personalTextColor,
+      DEFAULT_APP_SETTINGS.taskList.personalTextColor
+    ),
+  }))
   const [includeHistory, setIncludeHistory] = useState(false)
   const [settingsDraft, setSettingsDraft] = useState(initialSettings)
   const [settingsSavedMessage, setSettingsSavedMessage] = useState('')
@@ -2304,6 +2386,17 @@ function Dashboard({ token, onLogout }) {
       saveAppSettings(nextSettings)
       setSettingsSavedMessage(saveMessage)
       setGroupByPriority(Boolean(nextSettings.taskList.groupByPriorityDefault))
+      setAreaTextColoringEnabled(Boolean(nextSettings.taskList.areaTextColoringEnabled))
+      setAreaTextColors({
+        work: normalizeHexColor(
+          nextSettings.taskList.workTextColor,
+          DEFAULT_APP_SETTINGS.taskList.workTextColor
+        ),
+        personal: normalizeHexColor(
+          nextSettings.taskList.personalTextColor,
+          DEFAULT_APP_SETTINGS.taskList.personalTextColor
+        ),
+      })
       if (nextSettings.taskList.defaultArea === 'work') {
         setActiveView({ type: 'area', area: 'work' })
       } else if (nextSettings.taskList.defaultArea === 'personal') {
@@ -2342,6 +2435,14 @@ function Dashboard({ token, onLogout }) {
     saveAppSettings(reset)
     setSettingsSavedMessage('Local settings reset to defaults. Incoming email settings were preserved.')
     setGroupByPriority(Boolean(reset.taskList.groupByPriorityDefault))
+    setAreaTextColoringEnabled(Boolean(reset.taskList.areaTextColoringEnabled))
+    setAreaTextColors({
+      work: normalizeHexColor(reset.taskList.workTextColor, DEFAULT_APP_SETTINGS.taskList.workTextColor),
+      personal: normalizeHexColor(
+        reset.taskList.personalTextColor,
+        DEFAULT_APP_SETTINGS.taskList.personalTextColor
+      ),
+    })
     setActiveView({ type: 'all' })
   }
 
@@ -2675,6 +2776,19 @@ function Dashboard({ token, onLogout }) {
   function clearDragState() {
     setDraggedTaskId('')
     setDropTarget(null)
+  }
+
+  function taskAreaTextColorStyle(task) {
+    if (!areaTextColoringEnabled) {
+      return undefined
+    }
+    if (task.area === 'work') {
+      return { color: areaTextColors.work }
+    }
+    if (task.area === 'personal') {
+      return { color: areaTextColors.personal }
+    }
+    return undefined
   }
 
   function handleSortColumn(columnKey) {
@@ -3224,7 +3338,9 @@ function Dashboard({ token, onLogout }) {
                       aria-label={`Mark ${task.title} as complete`}
                     />
                     <div className="mobile-task-copy">
-                      <p className="mobile-task-title">{task.title}</p>
+                      <p className="mobile-task-title" style={taskAreaTextColorStyle(task)}>
+                        {task.title}
+                      </p>
                       <p className="mobile-task-meta">
                         {formatAreaLabel(task.area)}
                         {task.project ? ` • ${projectNameById[task.project] || 'Unknown project'}` : ''}
@@ -3416,6 +3532,7 @@ function Dashboard({ token, onLogout }) {
                         ]
                           .filter(Boolean)
                           .join(' ')}
+                        style={taskAreaTextColorStyle(task)}
                         onDragOver={(event) => handleRowDragOver(event, task.id)}
                         onDrop={(event) => handleRowDrop(event, task.id)}
                       >
@@ -3469,7 +3586,9 @@ function Dashboard({ token, onLogout }) {
                           </div>
                         </td>
                         <td>
-                          <div className="task-cell-content">{task.title}</div>
+                          <div className="task-cell-content">
+                            {task.title}
+                          </div>
                         </td>
                         <td>
                           <div className="task-cell-content">{formatAreaLabel(task.area)}</div>

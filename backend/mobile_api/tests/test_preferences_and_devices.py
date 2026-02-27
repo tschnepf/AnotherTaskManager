@@ -24,16 +24,28 @@ def test_preferences_split_and_device_registration():
 
     me_get = client.get("/api/mobile/v1/me/preferences")
     assert me_get.status_code == 200
+    assert me_get.data["area_text_coloring_enabled"] is False
+    assert me_get.data["work_area_text_color"] == "#93c5fd"
+    assert me_get.data["personal_area_text_color"] == "#86efac"
     notif_get = client.get("/api/mobile/v1/notifications/preferences")
     assert notif_get.status_code == 200
 
     me_patch = client.patch(
         "/api/mobile/v1/me/preferences",
-        {"show_completed_default": True, "start_of_week": "sunday"},
+        {
+            "show_completed_default": True,
+            "start_of_week": "sunday",
+            "area_text_coloring_enabled": True,
+            "work_area_text_color": "#112233",
+            "personal_area_text_color": "#aabbcc",
+        },
         format="json",
     )
     assert me_patch.status_code == 200
     assert me_patch.data["show_completed_default"] is True
+    assert me_patch.data["area_text_coloring_enabled"] is True
+    assert me_patch.data["work_area_text_color"] == "#112233"
+    assert me_patch.data["personal_area_text_color"] == "#aabbcc"
 
     notif_patch = client.patch(
         "/api/mobile/v1/notifications/preferences",
@@ -78,6 +90,13 @@ def test_preferences_split_and_device_registration():
         format="json",
     )
     assert bad_bundle.status_code == 400
+
+    bad_color = client.patch(
+        "/api/mobile/v1/me/preferences",
+        {"work_area_text_color": "blue"},
+        format="json",
+    )
+    assert bad_color.status_code == 400
 
 
 @pytest.mark.django_db

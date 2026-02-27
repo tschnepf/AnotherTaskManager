@@ -556,6 +556,47 @@ button {
   gap: 10px;
 }
 
+.settings-color-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.settings-color-grid .settings-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-color-grid input[type='color'] {
+  width: 34px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-color-grid input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.settings-color-grid input[type='color']::-webkit-color-swatch {
+  border: 0;
+  border-radius: 4px;
+}
+
+.settings-color-grid input[type='color']::-moz-color-swatch {
+  border: 0;
+  border-radius: 4px;
+}
+
+.settings-color-grid input[type='color']:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .settings-field-small input {
   text-align: center;
 }
