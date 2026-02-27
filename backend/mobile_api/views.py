@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from datetime import timezone as dt_timezone
 from typing import Any
 
 from django.conf import settings
+from django.db.models import Case, IntegerField, Q, Value, When
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -272,7 +274,19 @@ class MobileTaskListCreateView(MobileEnabledAPIView):
     }
 
     def get(self, request):
-        queryset = Task.objects.filter(organization=self._org()).select_related("project").order_by("position", "-created_at")
+        done_cutoff = timezone.now() - timedelta(hours=24)
+        queryset = Task.objects.filter(organization=self._org()).select_related("project")
+        queryset = queryset.exclude(
+            Q(status=Task.Status.DONE) & (Q(completed_at__lt=done_cutoff) | Q(completed_at__isnull=True))
+        )
+        queryset = queryset.exclude(status=Task.Status.ARCHIVED)
+        queryset = queryset.annotate(
+            completion_group=Case(
+                When(status=Task.Status.DONE, then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        ).order_by("completion_group", "position", "-created_at")
         limit_raw = request.query_params.get("limit")
         if limit_raw:
             try:

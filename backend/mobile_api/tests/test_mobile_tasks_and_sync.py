@@ -1,9 +1,11 @@
 import pytest
+from datetime import timedelta
 from django.test import override_settings
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core.models import Organization, User
+from tasks.models import Task
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
@@ -74,10 +76,37 @@ def test_mobile_session_tasks_idempotency_and_delta_sync():
     assert find_project_res.data
     assert find_project_res.data[0]["name"] == "iOS Project"
 
+    old_done = Task.objects.create(
+        organization=org,
+        created_by_user=user,
+        title="Old completed",
+        area=Task.Area.WORK,
+        status=Task.Status.DONE,
+        completed_at=timezone.now() - timedelta(hours=25),
+        position=999,
+    )
+    recent_done = Task.objects.create(
+        organization=org,
+        created_by_user=user,
+        title="Recent completed",
+        area=Task.Area.WORK,
+        status=Task.Status.DONE,
+        completed_at=timezone.now() - timedelta(hours=1),
+        position=1000,
+    )
+
     list_res = client.get("/api/mobile/v1/tasks")
     assert list_res.status_code == 200
     assert isinstance(list_res.data, list)
     assert list_res.data
+    listed_ids = {item["id"] for item in list_res.data}
+    assert str(old_done.id) not in listed_ids
+    assert str(recent_done.id) in listed_ids
+    completion_flags = [bool(item["is_completed"]) for item in list_res.data]
+    if True in completion_flags:
+        first_completed_index = completion_flags.index(True)
+        assert all(not value for value in completion_flags[:first_completed_index])
+        assert all(value for value in completion_flags[first_completed_index:])
     assert {"id", "title", "is_completed", "due_at", "updated_at", "project", "project_name"}.issubset(
         set(list_res.data[0].keys())
     )
