@@ -837,6 +837,59 @@ function formatCreatedTimestamp(value) {
   return months === 1 ? '1 month ago' : `${months} months ago`
 }
 
+function normalizedSortText(value) {
+  return String(value || '').trim().toLocaleLowerCase()
+}
+
+function compareTaskTextValues(leftValue, rightValue) {
+  return normalizedSortText(leftValue).localeCompare(normalizedSortText(rightValue), undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
+}
+
+function compareTaskDateValues(leftValue, rightValue, direction) {
+  const leftTime = new Date(leftValue || '').getTime()
+  const rightTime = new Date(rightValue || '').getTime()
+  const leftIsValid = Number.isFinite(leftTime)
+  const rightIsValid = Number.isFinite(rightTime)
+
+  if (!leftIsValid && !rightIsValid) {
+    return 0
+  }
+  if (!leftIsValid) {
+    return 1
+  }
+  if (!rightIsValid) {
+    return -1
+  }
+  return (leftTime - rightTime) * direction
+}
+
+function compareTaskPriorityValues(leftValue, rightValue, direction) {
+  const rankFromPriority = (priorityValue) => {
+    const level = priorityLevelFromValue(priorityValue)
+    if (level === 'high') return 3
+    if (level === 'medium') return 2
+    if (level === 'low') return 1
+    return 0
+  }
+
+  const leftRank = rankFromPriority(leftValue)
+  const rightRank = rankFromPriority(rightValue)
+
+  if (leftRank === 0 && rightRank === 0) {
+    return 0
+  }
+  if (leftRank === 0) {
+    return 1
+  }
+  if (rightRank === 0) {
+    return -1
+  }
+  return (leftRank - rightRank) * direction
+}
+
 function AuthPage() {
   const location = useLocation()
   const [isRedirecting, setIsRedirecting] = useState(false)
@@ -1826,6 +1879,7 @@ function Dashboard({ token, onLogout }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [isMobileQuickAddOpen, setIsMobileQuickAddOpen] = useState(false)
   const [isDesktopQuickAddOpen, setIsDesktopQuickAddOpen] = useState(false)
+  const [taskSort, setTaskSort] = useState({ key: '', direction: 'asc' })
   const projectNameById = useMemo(
     () => Object.fromEntries(projects.map((project) => [project.id, project.name])),
     [projects]
@@ -1839,7 +1893,42 @@ function Dashboard({ token, onLogout }) {
     () => sidebarProjects.filter((project) => project.area === 'personal'),
     [sidebarProjects]
   )
-  const filteredTasks = useMemo(() => tasks, [tasks])
+  const filteredTasks = useMemo(() => {
+    if (!taskSort.key) {
+      return tasks
+    }
+
+    const direction = taskSort.direction === 'desc' ? -1 : 1
+    return [...tasks].sort((leftTask, rightTask) => {
+      let result = 0
+      if (taskSort.key === 'title') {
+        result = compareTaskTextValues(leftTask.title, rightTask.title)
+      } else if (taskSort.key === 'area') {
+        result = compareTaskTextValues(formatAreaLabel(leftTask.area), formatAreaLabel(rightTask.area))
+      } else if (taskSort.key === 'project') {
+        const leftProjectName = leftTask.project ? projectNameById[leftTask.project] || 'Unknown project' : ''
+        const rightProjectName = rightTask.project
+          ? projectNameById[rightTask.project] || 'Unknown project'
+          : ''
+        result = compareTaskTextValues(leftProjectName, rightProjectName)
+      } else if (taskSort.key === 'priority') {
+        result = compareTaskPriorityValues(leftTask.priority, rightTask.priority, direction)
+      } else if (taskSort.key === 'date') {
+        result = compareTaskDateValues(leftTask.due_at, rightTask.due_at, direction)
+      } else if (taskSort.key === 'created') {
+        result = compareTaskDateValues(
+          leftTask.created_at || leftTask.created,
+          rightTask.created_at || rightTask.created,
+          direction
+        )
+      }
+      if (taskSort.key === 'priority' || taskSort.key === 'date' || taskSort.key === 'created') {
+        return result
+      }
+      return result * direction
+    })
+  }, [projectNameById, taskSort.direction, taskSort.key, tasks])
+  const isManualTaskOrder = !taskSort.key
   const activeViewLabel = useMemo(() => {
     if (activeView.type === 'all') {
       return 'All Tasks'
@@ -1896,6 +1985,11 @@ function Dashboard({ token, onLogout }) {
       document.removeEventListener('mousedown', handleOutsideClick)
     }
   }, [openDeleteTaskId])
+
+  useEffect(() => {
+    setDraggedTaskId('')
+    setDropTarget(null)
+  }, [taskSort.direction, taskSort.key])
 
   useEffect(() => {
     if (!expandedTaskId) {
@@ -2583,13 +2677,45 @@ function Dashboard({ token, onLogout }) {
     setDropTarget(null)
   }
 
+  function handleSortColumn(columnKey) {
+    setTaskSort((current) => {
+      if (current.key !== columnKey) {
+        return { key: columnKey, direction: 'asc' }
+      }
+      if (current.direction === 'asc') {
+        return { key: columnKey, direction: 'desc' }
+      }
+      return { key: '', direction: 'asc' }
+    })
+  }
+
+  function headerSortAriaValue(columnKey) {
+    if (taskSort.key !== columnKey) {
+      return 'none'
+    }
+    return taskSort.direction === 'asc' ? 'ascending' : 'descending'
+  }
+
+  function sortIndicator(columnKey) {
+    if (taskSort.key !== columnKey) {
+      return '↕'
+    }
+    return taskSort.direction === 'asc' ? '▲' : '▼'
+  }
+
   function handleDragStart(event, taskId) {
+    if (!isManualTaskOrder) {
+      return
+    }
     event.dataTransfer.effectAllowed = 'move'
     event.dataTransfer.setData('text/plain', String(taskId))
     setDraggedTaskId(taskId)
   }
 
   function handleRowDragOver(event, taskId) {
+    if (!isManualTaskOrder) {
+      return
+    }
     if (!draggedTaskId || draggedTaskId === taskId) {
       return
     }
@@ -2605,6 +2731,10 @@ function Dashboard({ token, onLogout }) {
   }
 
   async function handleRowDrop(event, taskId) {
+    if (!isManualTaskOrder) {
+      clearDragState()
+      return
+    }
     if (!draggedTaskId || draggedTaskId === taskId) {
       clearDragState()
       return
@@ -2624,6 +2754,9 @@ function Dashboard({ token, onLogout }) {
   }
 
   function handleBodyDragOver(event) {
+    if (!isManualTaskOrder) {
+      return
+    }
     if (!draggedTaskId) {
       return
     }
@@ -2638,6 +2771,10 @@ function Dashboard({ token, onLogout }) {
   }
 
   async function handleBodyDrop(event) {
+    if (!isManualTaskOrder) {
+      clearDragState()
+      return
+    }
     if (!draggedTaskId) {
       return
     }
@@ -3156,13 +3293,109 @@ function Dashboard({ token, onLogout }) {
                     <th className="expand-header"></th>
                     <th className="drag-header"></th>
                     <th>Done</th>
-                    <th>Title</th>
-                    <th>Area</th>
-                    <th>Project</th>
-                    <th>Priority</th>
-                    <th>Date</th>
+                    <th aria-sort={headerSortAriaValue('title')}>
+                      <button
+                        type="button"
+                        className={
+                          taskSort.key === 'title'
+                            ? 'task-sort-button task-sort-button-active'
+                            : 'task-sort-button'
+                        }
+                        onClick={() => handleSortColumn('title')}
+                        aria-label="Sort by title"
+                      >
+                        <span>Title</span>
+                        <span className="task-sort-indicator" aria-hidden="true">
+                          {sortIndicator('title')}
+                        </span>
+                      </button>
+                    </th>
+                    <th aria-sort={headerSortAriaValue('area')}>
+                      <button
+                        type="button"
+                        className={
+                          taskSort.key === 'area'
+                            ? 'task-sort-button task-sort-button-active'
+                            : 'task-sort-button'
+                        }
+                        onClick={() => handleSortColumn('area')}
+                        aria-label="Sort by area"
+                      >
+                        <span>Area</span>
+                        <span className="task-sort-indicator" aria-hidden="true">
+                          {sortIndicator('area')}
+                        </span>
+                      </button>
+                    </th>
+                    <th aria-sort={headerSortAriaValue('project')}>
+                      <button
+                        type="button"
+                        className={
+                          taskSort.key === 'project'
+                            ? 'task-sort-button task-sort-button-active'
+                            : 'task-sort-button'
+                        }
+                        onClick={() => handleSortColumn('project')}
+                        aria-label="Sort by project"
+                      >
+                        <span>Project</span>
+                        <span className="task-sort-indicator" aria-hidden="true">
+                          {sortIndicator('project')}
+                        </span>
+                      </button>
+                    </th>
+                    <th aria-sort={headerSortAriaValue('priority')}>
+                      <button
+                        type="button"
+                        className={
+                          taskSort.key === 'priority'
+                            ? 'task-sort-button task-sort-button-active'
+                            : 'task-sort-button'
+                        }
+                        onClick={() => handleSortColumn('priority')}
+                        aria-label="Sort by priority"
+                      >
+                        <span>Priority</span>
+                        <span className="task-sort-indicator" aria-hidden="true">
+                          {sortIndicator('priority')}
+                        </span>
+                      </button>
+                    </th>
+                    <th aria-sort={headerSortAriaValue('date')}>
+                      <button
+                        type="button"
+                        className={
+                          taskSort.key === 'date'
+                            ? 'task-sort-button task-sort-button-active'
+                            : 'task-sort-button'
+                        }
+                        onClick={() => handleSortColumn('date')}
+                        aria-label="Sort by date"
+                      >
+                        <span>Date</span>
+                        <span className="task-sort-indicator" aria-hidden="true">
+                          {sortIndicator('date')}
+                        </span>
+                      </button>
+                    </th>
                     <th>Repeat</th>
-                    <th>Created</th>
+                    <th aria-sort={headerSortAriaValue('created')}>
+                      <button
+                        type="button"
+                        className={
+                          taskSort.key === 'created'
+                            ? 'task-sort-button task-sort-button-active'
+                            : 'task-sort-button'
+                        }
+                        onClick={() => handleSortColumn('created')}
+                        aria-label="Sort by created date"
+                      >
+                        <span>Created</span>
+                        <span className="task-sort-indicator" aria-hidden="true">
+                          {sortIndicator('created')}
+                        </span>
+                      </button>
+                    </th>
                     <th className="actions-header"></th>
                   </tr>
                 </thead>
@@ -3209,11 +3442,16 @@ function Dashboard({ token, onLogout }) {
                         <td className="drag-cell">
                           <button
                             type="button"
-                            className="task-grabber"
-                            draggable
+                            className={isManualTaskOrder ? 'task-grabber' : 'task-grabber task-grabber-disabled'}
+                            draggable={isManualTaskOrder}
+                            disabled={!isManualTaskOrder}
                             onDragStart={(event) => handleDragStart(event, task.id)}
                             onDragEnd={clearDragState}
-                            aria-label={`Reorder ${task.title}`}
+                            aria-label={
+                              isManualTaskOrder
+                                ? `Reorder ${task.title}`
+                                : 'Reordering is available only when no column sort is active'
+                            }
                           >
                             ⋮⋮
                           </button>

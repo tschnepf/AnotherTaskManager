@@ -623,6 +623,38 @@ td {
   text-align: left;
 }
 
+th {
+  font-weight: 700;
+}
+
+.task-sort-button {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.task-sort-button:hover {
+  color: #c7d9f6;
+}
+
+.task-sort-button-active {
+  color: #93c5fd;
+}
+
+.task-sort-indicator {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
 .expand-header {
   width: 36px;
 }
@@ -733,6 +765,15 @@ td {
 
 .task-grabber:active {
   cursor: grabbing;
+}
+
+.task-grabber-disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.task-grabber-disabled:hover {
+  color: var(--muted);
 }
 
 .task-expand-toggle {
