@@ -31,8 +31,9 @@ def test_mobile_errors_use_standard_envelope():
         {"title": "Needs key", "area": "work"},
         format="json",
     )
-    assert missing_idempotency.status_code == 201
-    assert "id" in missing_idempotency.data
+    assert missing_idempotency.status_code == 400
+    assert missing_idempotency.data["error"]["code"] == "validation_error"
+    assert "request_id" in missing_idempotency.data
 
 
 @pytest.mark.django_db(transaction=True)

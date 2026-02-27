@@ -295,7 +295,17 @@ ATTACHMENT_ACCESS_TOKEN_MAX_AGE_SECONDS = os.getenv("ATTACHMENT_ACCESS_TOKEN_MAX
 MOBILE_API_ENABLED = _env_bool("MOBILE_API_ENABLED", False)
 KEYCLOAK_AUTH_ENABLED = _env_bool("KEYCLOAK_AUTH_ENABLED", False)
 KEYCLOAK_BASE_URL = str(os.getenv("KEYCLOAK_BASE_URL", "http://keycloak:8080/idp")).strip()
-KEYCLOAK_PUBLIC_BASE_URL = str(os.getenv("KEYCLOAK_PUBLIC_BASE_URL", "")).strip()
+KEYCLOAK_PUBLIC_BASE_URL = str(os.getenv("KEYCLOAK_PUBLIC_BASE_URL", "")).strip().rstrip("/")
+if KEYCLOAK_AUTH_ENABLED and not DEBUG:
+    if not KEYCLOAK_PUBLIC_BASE_URL:
+        raise ImproperlyConfigured(
+            "KEYCLOAK_PUBLIC_BASE_URL is required when KEYCLOAK_AUTH_ENABLED is true in non-debug environments."
+        )
+    parsed_public_base = urlparse(KEYCLOAK_PUBLIC_BASE_URL)
+    if parsed_public_base.scheme.lower() != "https" or not parsed_public_base.netloc:
+        raise ImproperlyConfigured(
+            "KEYCLOAK_PUBLIC_BASE_URL must be a valid HTTPS URL when KEYCLOAK_AUTH_ENABLED is true in non-debug environments."
+        )
 KEYCLOAK_REALM = str(os.getenv("KEYCLOAK_REALM", "taskhub")).strip()
 KEYCLOAK_IOS_CLIENT_ID = str(os.getenv("KEYCLOAK_IOS_CLIENT_ID", "taskhub-mobile")).strip()
 KEYCLOAK_REQUIRED_AUDIENCE = str(os.getenv("KEYCLOAK_REQUIRED_AUDIENCE", "taskhub-api")).strip()

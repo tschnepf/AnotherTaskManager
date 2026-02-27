@@ -6,6 +6,7 @@ def test_openapi_schema_contains_core_mobile_paths():
     paths = schema["paths"]
     assert "/api/mobile/v1/meta" in paths
     assert "/api/mobile/v1/sync/delta" in paths
+    assert "/api/mobile/v1/projects" in paths
     assert "/api/mobile/v1/intents/create-task" in paths
     assert "MobileErrorEnvelope" in schema["components"]["schemas"]
 

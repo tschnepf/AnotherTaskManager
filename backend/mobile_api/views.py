@@ -307,9 +307,6 @@ class MobileTaskListCreateView(MobileEnabledAPIView):
             task = serializer.save()
             return Response(MobileTaskSerializer(task).data, status=status.HTTP_201_CREATED)
 
-        # Backward compatibility: older mobile clients may omit Idempotency-Key.
-        if not str(request.headers.get("Idempotency-Key") or "").strip():
-            return action()
         return with_idempotency(request, endpoint="POST:/api/mobile/v1/tasks", action=action)
 
 
@@ -589,8 +586,6 @@ class IntentCreateTaskView(MobileEnabledAPIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-        if not str(request.headers.get("Idempotency-Key") or "").strip():
-            return action()
         return with_idempotency(request, endpoint="POST:/api/mobile/v1/intents/create-task", action=action)
 
 

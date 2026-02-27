@@ -12,8 +12,17 @@ bash tools/keycloak/validate-realm-export.sh tools/keycloak/realm-export/taskhub
 ```
 7. Validate OIDC public endpoint reachability using `docs/oidc-public-endpoints-runbook.md`.
 
+## Production safety baseline
+1. Use HTTPS for all public Task Hub and Keycloak endpoints (no plain HTTP in non-dev).
+2. Set `KEYCLOAK_PUBLIC_BASE_URL` to the canonical public HTTPS origin (for example, `https://tasks.example.com`).
+3. Configure Keycloak with strict hostname validation in production: `KC_HOSTNAME_STRICT=true`.
+4. Keep default onboarding posture strict:
+   - `KEYCLOAK_AUTO_PROVISION_USERS=false`
+   - `KEYCLOAK_AUTO_PROVISION_ORGANIZATION=false`
+5. If temporary bootstrap auto-provisioning is used, disable it immediately after initial onboarding.
+
 ## Fresh deployment bootstrap (single first-admin command)
-1. Enable web/mobile IdP auth and JIT provisioning in environment:
+1. Enable web/mobile IdP auth and temporary JIT provisioning in environment:
    - `KEYCLOAK_AUTH_ENABLED=true`
    - `MOBILE_API_ENABLED=true`
    - `KEYCLOAK_WEB_AUTH_ENABLED=true`
@@ -32,6 +41,9 @@ docker exec -it taskhub-api python backend/manage.py bootstrap_idp_admin \
 ```
 3. Use `/login` web page -> `Continue with TaskHub ID` (OIDC).
 4. iOS login uses same IdP credentials.
+5. After initial admin bootstrap, set:
+   - `KEYCLOAK_AUTO_PROVISION_USERS=false`
+   - `KEYCLOAK_AUTO_PROVISION_ORGANIZATION=false`
 
 ## Fresh deployment bootstrap (web-only, no CLI user creation)
 1. Enable in environment:
@@ -52,6 +64,9 @@ docker exec -it taskhub-api python backend/manage.py bootstrap_idp_admin \
    - Django user is auto-created and linked
    - first auto-provisioned user is app superuser/staff + owner
 6. Use same credentials for iOS and web.
+7. After first account bootstrap, set:
+   - `KEYCLOAK_AUTO_PROVISION_USERS=false`
+   - `KEYCLOAK_AUTO_PROVISION_ORGANIZATION=false`
 
 ## Migration + onboarding
 1. Export existing Django users to CSV:
@@ -106,7 +121,7 @@ python tools/keycloak/backfill_oidc_identity.py \
 2. Temporarily disable mobile traffic by setting `MOBILE_API_ENABLED=false` if auth incident is unresolved.
 3. Preserve legacy web auth while mobile auth is degraded.
 
-## JIT provisioning (recommended for fresh installs)
+## JIT provisioning (optional bootstrap mode)
 1. Enable automatic first-login provisioning:
    - `KEYCLOAK_AUTO_PROVISION_USERS=true`
    - `KEYCLOAK_AUTO_PROVISION_ORGANIZATION=true`
@@ -114,7 +129,7 @@ python tools/keycloak/backfill_oidc_identity.py \
    - creates/links local Django user by token email claim
    - creates an organization for brand-new users
    - creates `OIDCIdentity` issuer/subject mapping
-3. Keep `KEYCLOAK_AUTO_PROVISION_USERS=false` if you require explicit admin onboarding only.
+3. Production default should remain `false` for both flags unless explicitly running a controlled bootstrap window.
 
 ## Rollback
 1. Set `KEYCLOAK_AUTH_ENABLED=false` and `MOBILE_API_ENABLED=false`.

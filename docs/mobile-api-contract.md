@@ -16,13 +16,15 @@
 6. `PATCH /tasks/{id}`
 7. `DELETE /tasks/{id}`
 8. `GET /sync/delta`
-9. `GET/PATCH /me/preferences`
-10. `GET/PATCH /notifications/preferences`
-11. `POST /devices/register`
-12. `POST /devices/unregister`
-13. `PATCH/DELETE /devices/{id}`
-14. `POST /intents/create-task` (requires `Idempotency-Key`)
-15. `GET /widget/snapshot`
+9. `GET /projects`
+10. `POST /projects`
+11. `GET/PATCH /me/preferences`
+12. `GET/PATCH /notifications/preferences`
+13. `POST /devices/register`
+14. `POST /devices/unregister`
+15. `PATCH/DELETE /devices/{id}`
+16. `POST /intents/create-task` (requires `Idempotency-Key`)
+17. `GET /widget/snapshot`
 
 ## Task payloads
 1. `GET /tasks` summary items include:

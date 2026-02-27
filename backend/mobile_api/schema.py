@@ -47,6 +47,10 @@ def generate_mobile_openapi() -> dict:
             "/api/mobile/v1/sync/delta": {
                 "get": _op(summary="Cursor-based delta sync", scopes=["mobile.sync"]),
             },
+            "/api/mobile/v1/projects": {
+                "get": _op(summary="List projects", scopes=["mobile.read"]),
+                "post": _op(summary="Create project", scopes=["mobile.write"], request_body=True),
+            },
             "/api/mobile/v1/me/preferences": {
                 "get": _op(summary="Read app UI preferences", scopes=["mobile.read"]),
                 "patch": _op(summary="Update app UI preferences", scopes=["mobile.write"], request_body=True),
