@@ -1662,6 +1662,10 @@ function SettingsPage({
                 header <code>X-TaskHub-Ingest-Token</code>. The forwarded body should use:
                 title, project, work/personal, priority (one per line).
               </p>
+              <p className="settings-note">
+                Outlook add-in users should use this webhook path, then paste this recipient + ingest token in
+                the add-in Advanced Settings.
+              </p>
             </>
           ) : null}
           {inboundMode === 'imap' ? (
@@ -1678,6 +1682,10 @@ function SettingsPage({
           <p className="settings-note">
             When whitelist entries are set, only those sender addresses can create tasks. Leave blank to
             allow all senders.
+          </p>
+          <p className="settings-note">
+            Rotate the ingest token after any suspected exposure. The new token is only shown immediately
+            after rotation, so copy it to your add-in configuration right away.
           </p>
         </div>
       )

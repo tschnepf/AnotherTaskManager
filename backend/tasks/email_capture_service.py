@@ -46,6 +46,12 @@ def ingest_raw_email_for_org(
     raw_eml: bytes,
     *,
     sender_override: str = "",
+    task_title_override: str = "",
+    project_override: str = "",
+    area_override: str = "",
+    priority_override=None,
+    source_external_id: str = "",
+    source_origin: str = "",
 ):
     if not raw_eml:
         raise EmailIngestError(400, "validation_error", "an .eml payload is required")
@@ -83,50 +89,52 @@ def ingest_raw_email_for_org(
 
     forced_title = str(force_directives.get("task") or "").strip()
     forced_project_name = str(force_directives.get("project") or "").strip()
+    explicit_title = str(task_title_override or "").strip()
+    explicit_project_name = str(project_override or "").strip()
+    explicit_source_origin = str(source_origin or "").strip()
+    explicit_source_external_id = str(source_external_id or "").strip()
+    if len(explicit_source_external_id) > 512:
+        explicit_source_external_id = explicit_source_external_id[:512]
+
+    try:
+        explicit_area = _parse_optional_area_override(area_override)
+    except ValueError as exc:
+        raise EmailIngestError(400, "validation_error", str(exc)) from exc
+
+    try:
+        explicit_priority = _parse_optional_priority_override(priority_override)
+    except ValueError as exc:
+        raise EmailIngestError(400, "validation_error", str(exc)) from exc
+
     if forced_project_name and not forced_title:
         title = body_title
-    if forced_title:
+    if explicit_title:
+        title = explicit_title
+    elif forced_title:
         title = forced_title
 
-    project_match = None
-    if forced_project_name:
-        normalized_hint = loose_key(forced_project_name)
-        candidate_name = forced_project_name
-        project_match = next(
-            (
-                project
-                for project in Project.objects.filter(organization=organization)
-                if loose_key(project.name) == normalized_hint
-            ),
-            None,
-        )
-        if project_match is None:
-            try:
-                project_match = Project.objects.create(
-                    organization=organization,
-                    name=candidate_name,
-                    area=area,
-                )
-            except IntegrityError:
-                # Handle rare races where the same project name is created concurrently.
-                project_match = next(
-                    (
-                        project
-                        for project in Project.objects.filter(organization=organization)
-                        if loose_key(project.name) == normalized_hint
-                    ),
-                    None,
-                )
+    if explicit_area is not None:
+        area = explicit_area
+    if explicit_priority is not None:
+        priority = explicit_priority
+
+    project_to_resolve = ""
+    create_project_if_missing = False
+    if explicit_project_name:
+        project_to_resolve = explicit_project_name
+        create_project_if_missing = True
+    elif forced_project_name:
+        project_to_resolve = forced_project_name
+        create_project_if_missing = True
     elif project_hint:
-        normalized_hint = loose_key(project_hint)
-        project_match = next(
-            (
-                project
-                for project in Project.objects.filter(organization=organization)
-                if loose_key(project.name) == normalized_hint
-            ),
-            None,
-        )
+        project_to_resolve = project_hint
+
+    project_match = _resolve_project_match(
+        organization=organization,
+        project_name=project_to_resolve,
+        area=area,
+        create_if_missing=create_project_if_missing,
+    )
 
     next_position = (
         Task.objects.filter(organization=organization).aggregate(max_position=Max("position"))["max_position"] or 0
@@ -140,6 +148,8 @@ def ingest_raw_email_for_org(
         priority=priority,
         project=project_match,
         source_type=Task.SourceType.EMAIL,
+        source_external_id=explicit_source_external_id,
+        source_link=explicit_source_origin,
         source_snippet=metadata_body_text[:1000],
         position=next_position,
     )
@@ -306,3 +316,70 @@ def _inline_data_url(content_type: str, content: bytes) -> str:
         return ""
     encoded = base64.b64encode(bytes(content)).decode("ascii")
     return f"data:{content_type};base64,{encoded}"
+
+
+def _resolve_project_match(
+    *,
+    organization: Organization,
+    project_name: str,
+    area: str,
+    create_if_missing: bool,
+):
+    normalized_name = str(project_name or "").strip()
+    if not normalized_name:
+        return None
+
+    normalized_hint = loose_key(normalized_name)
+    project_match = next(
+        (
+            project
+            for project in Project.objects.filter(organization=organization)
+            if loose_key(project.name) == normalized_hint
+        ),
+        None,
+    )
+    if project_match is not None or not create_if_missing:
+        return project_match
+
+    try:
+        return Project.objects.create(
+            organization=organization,
+            name=normalized_name,
+            area=area,
+        )
+    except IntegrityError:
+        # Handle races where the same project name is created concurrently.
+        return next(
+            (
+                project
+                for project in Project.objects.filter(organization=organization)
+                if loose_key(project.name) == normalized_hint
+            ),
+            None,
+        )
+
+
+def _parse_optional_area_override(value: str):
+    candidate = str(value or "").strip().lower()
+    if not candidate:
+        return None
+    if candidate == Task.Area.WORK:
+        return Task.Area.WORK
+    if candidate == Task.Area.PERSONAL:
+        return Task.Area.PERSONAL
+    raise ValueError("area must be 'work' or 'personal'")
+
+
+def _parse_optional_priority_override(value):
+    if value in (None, ""):
+        return None
+
+    candidate = str(value).strip().lower()
+    if not candidate:
+        return None
+    if candidate.isdigit():
+        numeric = int(candidate)
+        if 1 <= numeric <= 5:
+            return numeric
+        raise ValueError("priority must be between 1 and 5")
+    raise ValueError("priority must be an integer between 1 and 5")

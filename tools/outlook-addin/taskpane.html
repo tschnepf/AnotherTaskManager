@@ -15,17 +15,46 @@
       </header>
 
       <section class="panel">
-        <label for="taskhub-url">Task Hub URL</label>
-        <input id="taskhub-url" type="url" placeholder="https://taskhub.example.com" />
+        <label for="task-title">Task Title</label>
+        <input id="task-title" type="text" placeholder="Prefilled from email subject" />
 
-        <label for="recipient-email">Inbound Recipient Email</label>
-        <input id="recipient-email" type="email" placeholder="inbound@yourdomain.com" />
+        <label for="task-project">Project (Optional)</label>
+        <input id="task-project" type="text" placeholder="Project name" />
 
-        <label for="ingest-token">Ingest Token</label>
-        <input id="ingest-token" type="password" placeholder="Paste X-TaskHub-Ingest-Token value" />
+        <div class="meta-grid">
+          <label for="task-area">Area</label>
+          <select id="task-area">
+            <option value="">Auto</option>
+            <option value="work">Work</option>
+            <option value="personal">Personal</option>
+          </select>
+
+          <label for="task-priority">Priority</label>
+          <select id="task-priority">
+            <option value="">Auto</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+
+        <details class="advanced-settings">
+          <summary>Advanced Settings</summary>
+          <label for="taskhub-url">Task Hub URL</label>
+          <input id="taskhub-url" type="url" placeholder="https://taskhub.example.com" />
+
+          <label for="recipient-email">Inbound Recipient Email</label>
+          <input id="recipient-email" type="email" placeholder="inbound@yourdomain.com" />
+
+          <label for="ingest-token">Ingest Token</label>
+          <input id="ingest-token" type="password" placeholder="Paste X-TaskHub-Ingest-Token value" />
+
+          <button id="save-settings" type="button" class="settings-button">Save Settings</button>
+        </details>
 
         <div class="actions">
-          <button id="save-settings" type="button">Save Settings</button>
           <button id="capture-email" type="button">Add Current Email</button>
         </div>
       </section>
@@ -33,7 +62,8 @@
       <section class="panel panel-muted">
         <p id="current-item" class="current-item">No email selected.</p>
         <p class="hint">
-          This stores your Task Hub URL/token in Outlook roaming settings so you stay authenticated for this add-in.
+          The add-in attaches the original email to the created task and stores URL/recipient/token in Outlook
+          roaming settings.
         </p>
         <p id="status" class="status" role="status" aria-live="polite"></p>
       </section>

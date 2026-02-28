@@ -6,6 +6,7 @@
   const INGEST_PATH = "/capture/email/inbound";
 
   const elements = {};
+  let lastAutofilledTitle = "";
 
   Office.onReady((info) => {
     if (info.host !== Office.HostType.Outlook) {
@@ -14,12 +15,17 @@
 
     cacheElements();
     bindHandlers();
+    bindItemChangeHandler();
     loadSettings();
     renderCurrentMessage();
     setStatus("Ready.", "info");
   });
 
   function cacheElements() {
+    elements.taskTitle = document.getElementById("task-title");
+    elements.taskProject = document.getElementById("task-project");
+    elements.taskArea = document.getElementById("task-area");
+    elements.taskPriority = document.getElementById("task-priority");
     elements.taskHubUrl = document.getElementById("taskhub-url");
     elements.recipientEmail = document.getElementById("recipient-email");
     elements.ingestToken = document.getElementById("ingest-token");
@@ -52,14 +58,23 @@
         validateSettings(settings);
         await saveSettings(settings);
 
+        const captureOverrides = readCaptureOverridesFromForm();
         const emlBase64 = await getCurrentMessageAsEmlBase64();
         const emlBlob = base64ToBlob(emlBase64, "message/rfc822");
         const filename = `${sanitizeFilename(getCurrentMessageSubject() || "outlook-message")}.eml`;
-        const responseData = await postToTaskHub(settings, emlBlob, filename);
+        const responseData = await postToTaskHub(settings, captureOverrides, emlBlob, filename);
 
-        const createdTitle = typeof responseData?.title === "string" ? responseData.title : "";
-        if (createdTitle) {
-          setStatus(`Task created: ${createdTitle}`, "success");
+        const taskTitle = typeof responseData?.title === "string" ? responseData.title : "";
+        if (responseData?.idempotent_replay) {
+          const message = taskTitle
+            ? `Task already exists for this email: ${taskTitle}`
+            : "Task already exists for this email.";
+          setStatus(message, "info");
+          return;
+        }
+
+        if (taskTitle) {
+          setStatus(`Task created: ${taskTitle}`, "success");
         } else {
           setStatus("Task created successfully.", "success");
         }
@@ -69,6 +84,22 @@
         elements.captureButton.disabled = false;
         elements.captureButton.textContent = previousText;
       }
+    });
+  }
+
+  function bindItemChangeHandler() {
+    const mailbox = Office.context?.mailbox;
+    if (!mailbox || typeof mailbox.addHandlerAsync !== "function") {
+      return;
+    }
+
+    const eventType = Office.EventType?.ItemChanged;
+    if (!eventType) {
+      return;
+    }
+
+    mailbox.addHandlerAsync(eventType, () => {
+      renderCurrentMessage();
     });
   }
 
@@ -109,6 +140,22 @@
     };
   }
 
+  function readCaptureOverridesFromForm() {
+    const taskTitle = String(elements.taskTitle.value || "").trim();
+    const project = String(elements.taskProject.value || "").trim();
+    const area = String(elements.taskArea.value || "").trim().toLowerCase();
+    const priority = String(elements.taskPriority.value || "").trim();
+
+    return {
+      taskTitle,
+      project,
+      area,
+      priority,
+      sourceOrigin: "outlook_addin",
+      sourceExternalId: getCurrentMessageInternetMessageId(),
+    };
+  }
+
   function validateSettings(settings) {
     if (!settings.taskHubUrl) {
       throw new Error("Task Hub URL is required.");
@@ -145,7 +192,7 @@
     });
   }
 
-  async function postToTaskHub(settings, emlBlob, filename) {
+  async function postToTaskHub(settings, overrides, emlBlob, filename) {
     const endpoint = `${settings.taskHubUrl}${INGEST_PATH}`;
     const formData = new FormData();
     formData.append("email", emlBlob, filename);
@@ -154,6 +201,25 @@
     const sender = getSenderEmailAddress();
     if (sender) {
       formData.append("sender", sender);
+    }
+
+    if (overrides.taskTitle) {
+      formData.append("task_title", overrides.taskTitle);
+    }
+    if (overrides.project) {
+      formData.append("project", overrides.project);
+    }
+    if (overrides.area) {
+      formData.append("area", overrides.area);
+    }
+    if (overrides.priority) {
+      formData.append("priority", overrides.priority);
+    }
+    if (overrides.sourceOrigin) {
+      formData.append("source_origin", overrides.sourceOrigin);
+    }
+    if (overrides.sourceExternalId) {
+      formData.append("source_external_id", overrides.sourceExternalId);
     }
 
     const response = await fetch(endpoint, {
@@ -166,10 +232,34 @@
 
     const responseBody = await parseResponseBody(response);
     if (!response.ok) {
-      const responseMessage = responseBody?.message || response.statusText || "Task Hub rejected the request.";
-      throw new Error(`Task Hub error (${response.status}): ${responseMessage}`);
+      const responseMessage = buildTaskHubErrorMessage(response.status, responseBody);
+      throw new Error(responseMessage);
     }
     return responseBody;
+  }
+
+  function buildTaskHubErrorMessage(statusCode, responseBody) {
+    const message = String(responseBody?.message || "").trim();
+
+    if (statusCode === 401) {
+      return "Task Hub rejected the request (401): ingest token header is missing.";
+    }
+    if (statusCode === 403) {
+      return message
+        ? `Task Hub rejected the request (403): ${message}`
+        : "Task Hub rejected the request (403): invalid token or sender blocked by whitelist.";
+    }
+    if (statusCode === 400) {
+      return message ? `Task Hub rejected the request (400): ${message}` : "Task Hub rejected the request (400).";
+    }
+    if (statusCode === 429) {
+      return "Task Hub rate limit exceeded (429). Please retry in a moment.";
+    }
+
+    if (message) {
+      return `Task Hub error (${statusCode}): ${message}`;
+    }
+    return `Task Hub error (${statusCode}).`;
   }
 
   async function parseResponseBody(response) {
@@ -227,11 +317,37 @@
       return;
     }
     elements.currentItem.textContent = `Current email: ${subject}`;
+    maybeAutofillTaskTitle(subject);
+  }
+
+  function maybeAutofillTaskTitle(subject) {
+    const normalizedSubject = String(subject || "").trim();
+    if (!normalizedSubject) {
+      return;
+    }
+
+    const currentValue = String(elements.taskTitle.value || "").trim();
+    if (!currentValue || currentValue === lastAutofilledTitle) {
+      elements.taskTitle.value = normalizedSubject;
+      lastAutofilledTitle = normalizedSubject;
+    }
   }
 
   function getCurrentMessageSubject() {
     const subject = Office.context?.mailbox?.item?.subject;
     return typeof subject === "string" ? subject.trim() : "";
+  }
+
+  function getCurrentMessageInternetMessageId() {
+    const item = Office.context?.mailbox?.item;
+    const rawValue = String(item?.internetMessageId || "").trim();
+    if (!rawValue) {
+      return "";
+    }
+    if (rawValue.startsWith("<") && rawValue.endsWith(">") && rawValue.length > 2) {
+      return rawValue.slice(1, -1).trim();
+    }
+    return rawValue;
   }
 
   function getSenderEmailAddress() {

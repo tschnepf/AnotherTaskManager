@@ -162,6 +162,8 @@ services:
     restart: unless-stopped
     ports:
       - "9632:80"
+    environment:
+      TASKHUB_PUBLIC_BASE_URL: ${TASKHUB_PUBLIC_BASE_URL:-https://tasks.example.com}
     depends_on:
       api:
         condition: service_healthy

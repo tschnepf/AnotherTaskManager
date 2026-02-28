@@ -3,7 +3,7 @@ import mimetypes
 import time
 from uuid import uuid4
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.core.files.storage import default_storage
 from django.http import FileResponse
 from django.utils.text import get_valid_filename
@@ -33,6 +33,7 @@ from tasks.attachments import (
 )
 from tasks.email_ingest import (
     extract_recipient,
+    extract_sender,
     parse_eml,
 )
 from tasks.email_capture_service import EmailIngestError, ingest_raw_email_for_org
@@ -495,6 +496,89 @@ def bookmarklet_capture_view(request):
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
+def _normalize_optional_capture_text(raw_value, *, field_name: str, max_length: int) -> str:
+    value = str(raw_value or "").strip()
+    if not value:
+        return ""
+    if len(value) > max_length:
+        raise ValueError(f"{field_name} must be at most {max_length} characters")
+    return value
+
+
+def _normalize_capture_area(raw_value) -> str:
+    if raw_value in (None, ""):
+        return ""
+    candidate = str(raw_value).strip().lower()
+    if candidate in {Task.Area.WORK, Task.Area.PERSONAL}:
+        return candidate
+    raise ValueError("area must be 'work' or 'personal'")
+
+
+def _normalize_capture_priority(raw_value):
+    if raw_value in (None, ""):
+        return None
+    candidate = str(raw_value).strip()
+    if not candidate:
+        return None
+    if not candidate.isdigit():
+        raise ValueError("priority must be an integer between 1 and 5")
+    value = int(candidate)
+    if value < 1 or value > 5:
+        raise ValueError("priority must be an integer between 1 and 5")
+    return value
+
+
+def _normalize_source_external_id(raw_value) -> str:
+    value = str(raw_value or "").strip()
+    if value.startswith("<") and value.endswith(">") and len(value) > 2:
+        value = value[1:-1].strip()
+    if not value:
+        return ""
+    if len(value) > 512:
+        return value[:512]
+    return value
+
+
+def _derived_source_external_id(parsed_email) -> str:
+    raw_message_id = parsed_email.get("Message-ID") or parsed_email.get("Message-Id") or ""
+    return _normalize_source_external_id(raw_message_id)
+
+
+def _find_existing_email_task(organization: Organization, source_external_id: str):
+    normalized_id = _normalize_source_external_id(source_external_id)
+    if not normalized_id:
+        return None
+    return (
+        Task.objects.filter(
+            organization=organization,
+            source_type=Task.SourceType.EMAIL,
+            source_external_id=normalized_id,
+        )
+        .order_by("-created_at")
+        .first()
+    )
+
+
+def _validate_sender_whitelist(organization: Organization, sender: str) -> None:
+    whitelist = {
+        str(email).strip().lower()
+        for email in (organization.inbound_email_whitelist or [])
+        if str(email).strip()
+    }
+    if not whitelist:
+        return
+    if not sender:
+        raise ValueError("sender email is required when whitelist is configured")
+    if sender not in whitelist:
+        raise ValueError("sender is not allowed by inbound email whitelist")
+
+
+def _task_payload_with_replay_flag(task: Task, *, idempotent_replay: bool) -> dict:
+    payload = TaskSerializer(task).data
+    payload["idempotent_replay"] = bool(idempotent_replay)
+    return payload
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 @throttle_classes([InboundIngestRateThrottle])
@@ -568,12 +652,77 @@ def inbound_email_capture_view(request):
             {"error_code": "forbidden", "message": "invalid ingest token", "details": {}},
             status=status.HTTP_403_FORBIDDEN,
         )
-    sender = str(request.data.get("sender") or request.data.get("from") or "").strip().lower()
+
+    try:
+        task_title_override = _normalize_optional_capture_text(
+            request.data.get("task_title"),
+            field_name="task_title",
+            max_length=500,
+        )
+        project_override = _normalize_optional_capture_text(
+            request.data.get("project"),
+            field_name="project",
+            max_length=255,
+        )
+        area_override = _normalize_capture_area(request.data.get("area"))
+        priority_override = _normalize_capture_priority(request.data.get("priority"))
+        source_origin = _normalize_optional_capture_text(
+            request.data.get("source_origin"),
+            field_name="source_origin",
+            max_length=255,
+        )
+        source_external_id = _normalize_source_external_id(request.data.get("source_external_id"))
+    except ValueError as exc:
+        return Response(
+            {
+                "error_code": "validation_error",
+                "message": str(exc),
+                "details": {},
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not source_external_id:
+        source_external_id = _derived_source_external_id(parsed)
+
+    sender = str(request.data.get("sender") or request.data.get("from") or extract_sender(parsed) or "").strip().lower()
+    try:
+        _validate_sender_whitelist(organization, sender)
+    except ValueError as exc:
+        return Response(
+            {"error_code": "forbidden", "message": str(exc), "details": {}},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    existing_task = _find_existing_email_task(organization, source_external_id)
+    if existing_task is not None:
+        return Response(
+            _task_payload_with_replay_flag(existing_task, idempotent_replay=True),
+            status=status.HTTP_200_OK,
+        )
+
     try:
         task = ingest_raw_email_for_org(
             organization,
             raw_eml,
             sender_override=sender,
+            task_title_override=task_title_override,
+            project_override=project_override,
+            area_override=area_override,
+            priority_override=priority_override,
+            source_external_id=source_external_id,
+            source_origin=source_origin,
+        )
+    except IntegrityError:
+        existing_task = _find_existing_email_task(organization, source_external_id)
+        if existing_task is not None:
+            return Response(
+                _task_payload_with_replay_flag(existing_task, idempotent_replay=True),
+                status=status.HTTP_200_OK,
+            )
+        return Response(
+            {"error_code": "conflict", "message": "duplicate email source identifier", "details": {}},
+            status=status.HTTP_409_CONFLICT,
         )
     except EmailIngestError as exc:
         return Response(
@@ -585,8 +734,10 @@ def inbound_email_capture_view(request):
             status=exc.status_code,
         )
 
-    serializer = TaskSerializer(task)
-    return Response(serializer.data, status=status.HTTP_201_CREATED)
+    return Response(
+        _task_payload_with_replay_flag(task, idempotent_replay=False),
+        status=status.HTTP_201_CREATED,
+    )
 
 
 @api_view(["GET"])

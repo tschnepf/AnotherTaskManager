@@ -25,6 +25,7 @@ At minimum, update:
 - `DJANGO_ALLOWED_HOSTS` (comma-separated backend hostnames)
 - `API_PORT`
 - `WEB_PORT`
+- `TASKHUB_PUBLIC_BASE_URL` (required for Outlook add-in manifest URLs)
 - `CORS_ALLOWED_ORIGINS` (for your web URL)
 - `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL` (must match)
 - Optional email/AI values if you plan to use those features
@@ -89,6 +90,7 @@ openssl rand -hex 32   # TASKHUB_FIELD_ENCRYPTION_KEY
 3. Set these `.env` values for your domain:
 - `DJANGO_ALLOWED_HOSTS=tasks.example.com`
 - `CORS_ALLOWED_ORIGINS=https://tasks.example.com`
+- `TASKHUB_PUBLIC_BASE_URL=https://tasks.example.com`
 - `AUTH_COOKIE_SECURE=true`
 - `CSRF_COOKIE_SECURE=true`
 - `WEB_PORT=8080` (or another internal host port)
@@ -197,6 +199,49 @@ curl -X POST http://localhost:8080/capture/email/inbound \
   -F "recipient=tasks@yourdomain.com" \
   -F "email=@/path/to/message.eml"
 ```
+
+### Outlook add-in (New Outlook Desktop for Windows)
+New Outlook desktop uses the same web add-in model as Outlook on the web (not COM/VSTO installers).
+
+#### 1) Prepare Task Hub
+1. Set `INBOUND_EMAIL_MODE=webhook`.
+2. Set `TASKHUB_PUBLIC_BASE_URL` to your real Task Hub URL (for example `https://tasks.example.com`).
+3. Restart the `web` service/container.
+4. Verify the manifest is reachable:
+   - `https://<your-host>/outlook-addin/manifest.xml`
+5. In Task Hub **Settings -> Incoming email capture**, copy:
+   - inbound recipient address
+   - inbound ingest token (rotate if needed)
+
+#### 2) Install path A (recommended for end users): Microsoft 365 admin deployment
+1. Admin opens Microsoft 365 admin center.
+2. Go to **Settings -> Integrated apps** (centralized deployment).
+3. Add custom Office add-in and upload the Task Hub manifest (file or URL).
+4. Assign users/groups and publish.
+5. Users open New Outlook desktop and the add-in appears automatically.
+
+#### 3) Install path B (single user): manual add from file
+1. Open New Outlook desktop.
+2. Go to **Settings -> Manage apps** (or **Get Add-ins**).
+3. Select **My add-ins -> Add a custom add-in -> Add from file**.
+4. Upload manifest file from your server URL above (or local copy of `tools/outlook-addin/manifest.xml`).
+
+#### 4) First run in New Outlook
+1. Open any email in read view.
+2. Click **Task Hub -> Add Task**.
+3. Expand **Advanced Settings** and enter:
+   - Task Hub URL
+   - inbound recipient address
+   - ingest token
+4. Click **Save Settings**.
+5. Click **Add Current Email** to create a task with the original email attached.
+6. Duplicate clicks for the same email are idempotent and return the existing task.
+
+Common errors:
+- `401`: missing token header in add-in request
+- `403`: invalid token or sender blocked by whitelist
+- `400`: invalid payload/override values
+- `429`: inbound capture rate limit exceeded
 
 ### Backup and restore
 - Go to **Settings -> Backup & Restore**

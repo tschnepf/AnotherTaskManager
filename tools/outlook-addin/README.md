@@ -5,15 +5,18 @@ This folder contains a web add-in that adds an **Add Task** button in message re
 ## What it does
 
 - Adds a ribbon/action-bar command in new Outlook: **Task Hub -> Add Task**
-- Opens a task pane with:
-  - Task Hub URL
-  - Inbound recipient email
-  - Inbound ingest token
-- Persists settings in Outlook roaming settings (plus local storage fallback), so you do not re-enter them each time.
-- Calls Task Hub inbound capture:
+- Opens a task pane with quick-create fields:
+  - Task title (prefilled from email subject)
+  - Project (optional)
+  - Area (`work`/`personal`, optional)
+  - Priority (`1`-`5`, optional)
+- Sends the current message to Task Hub inbound capture:
   - `POST /capture/email/inbound`
   - Header: `X-TaskHub-Ingest-Token`
-  - Form fields: `email` (`.eml`), `recipient`, optional `sender`
+  - Form fields: `email` (`.eml`), `recipient`, optional override fields
+- Adds idempotency metadata:
+  - `source_origin=outlook_addin`
+  - `source_external_id` from Outlook `internetMessageId` when available
 
 ## Files
 
@@ -22,36 +25,48 @@ This folder contains a web add-in that adds an **Add Task** button in message re
 - `commands.html`: command surface bootstrap file
 - `assets/`: add-in icons
 
-## Before sideloading
+## Production hosting (same origin)
 
-1. Host this folder over HTTPS (required by Outlook add-ins).
-2. Replace `https://taskhub.example.com` in `manifest.xml` with your HTTPS host.
+In this repo, the web image now copies this folder to `/outlook-addin/*` and rewrites the manifest host at container startup.
 
-Example replacement:
+Required env var:
 
-```bash
-perl -pi -e 's#https://taskhub\\.example\\.com#https://YOUR-HOST#g' tools/outlook-addin/manifest.xml
-```
+- `TASKHUB_PUBLIC_BASE_URL`
+  - Example local: `http://localhost:8080`
+  - Example production: `https://tasks.example.com`
+
+`manifest.xml` placeholder URLs (`https://taskhub.example.com`) are replaced at runtime with this value.
 
 ## Sideload in new Outlook for Windows
 
 1. Open new Outlook.
 2. Go to `Settings -> Manage apps` (or `Get Add-ins`).
 3. Choose `My add-ins -> Add a custom add-in -> Add from file`.
-4. Select `tools/outlook-addin/manifest.xml`.
+4. Use manifest URL from your server or upload file:
+   - URL: `https://YOUR-TASKHUB-HOST/outlook-addin/manifest.xml`
+   - File: `tools/outlook-addin/manifest.xml` (if manually adjusted)
 
 ## First run inside Outlook
 
-1. Open any email.
+1. Open any email in read mode.
 2. Click `Add Task` from the Task Hub button.
-3. Enter:
+3. Open **Advanced Settings** and enter:
    - Task Hub URL, for example `https://YOUR-HOST`
    - Recipient email matching Task Hub inbound email address
    - Ingest token from Task Hub settings
-4. Click `Save Settings`.
+4. Optionally set title/project/area/priority.
 5. Click `Add Current Email`.
 
-## Notes
+## Troubleshooting
 
-- The add-in stores your ingest token in Outlook roaming settings. Treat that token as sensitive.
-- If Task Hub is on a different origin than the add-in host, configure CORS accordingly.
+- `401`: Missing ingest token header. Save a valid token in Advanced Settings.
+- `403`: Invalid token or sender rejected by whitelist.
+- `400`: Invalid payload (for example invalid `.eml`, bad area/priority override).
+- `429`: Inbound capture throttled; retry after a short delay.
+- `Task already exists for this email`: Idempotent replay detected; no duplicate task was created.
+
+## Security notes
+
+- The add-in stores URL/recipient/token in Outlook roaming settings (plus local storage fallback).
+- Treat ingest tokens as sensitive and rotate them when needed.
+- For this integration, run Task Hub with `INBOUND_EMAIL_MODE=webhook`.

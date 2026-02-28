@@ -108,6 +108,7 @@ class Task(models.Model):
     recurrence = models.CharField(max_length=20, choices=Recurrence.choices, default=Recurrence.NONE)
     completed_at = models.DateTimeField(null=True, blank=True)
     source_type = models.CharField(max_length=20, choices=SourceType.choices, default=SourceType.SELF)
+    source_external_id = models.CharField(max_length=512, blank=True, db_index=True)
     source_link = models.TextField(blank=True)
     source_snippet = models.TextField(blank=True)
     allow_cloud_processing = models.BooleanField(null=True, blank=True)
@@ -134,6 +135,11 @@ class Task(models.Model):
             models.CheckConstraint(
                 condition=Q(status="done") | Q(completed_at__isnull=True),
                 name="task_not_done_null_completed_at",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "source_type", "source_external_id"],
+                condition=Q(source_type="email") & ~Q(source_external_id=""),
+                name="task_email_source_external_id_uniq",
             ),
         ]
 

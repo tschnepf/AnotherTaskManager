@@ -17,6 +17,7 @@ def _build_eml(
     body: str,
     to_address: str,
     from_address: str = "sender@example.com",
+    message_id: str | None = None,
     html_body: str | None = None,
     attachments: list[tuple[str, bytes, str]] | None = None,
     inline_images: list[tuple[str, bytes, str, str]] | None = None,
@@ -25,6 +26,8 @@ def _build_eml(
     message["From"] = from_address
     message["To"] = to_address
     message["Subject"] = subject
+    if message_id is not None:
+        message["Message-ID"] = message_id
     message.set_content(body)
     if html_body is not None:
         message.add_alternative(html_body, subtype="html")
@@ -560,6 +563,175 @@ def test_inbound_email_capture_allows_sender_in_whitelist():
     )
 
     assert response.status_code == 201
+
+
+@pytest.mark.django_db
+def test_inbound_email_capture_explicit_overrides_take_precedence():
+    org = Organization.objects.create(
+        name="Email Org",
+        inbound_email_address="tasks@example.com",
+        inbound_email_token="token-123",
+    )
+    User.objects.create_user(
+        email="owner@example.com",
+        password="StrongPass123!",
+        role=User.Role.OWNER,
+        organization=org,
+    )
+
+    client = APIClient()
+    raw_eml = _build_eml(
+        subject="Original subject",
+        body="Body-derived title\nBody project\nwork\nlow\n",
+        to_address="tasks@example.com",
+    )
+    uploaded = SimpleUploadedFile("forwarded.eml", raw_eml, content_type="message/rfc822")
+
+    response = client.post(
+        "/capture/email/inbound",
+        {
+            "recipient": "tasks@example.com",
+            "email": uploaded,
+            "task_title": "Override title",
+            "project": "Override Project",
+            "area": "personal",
+            "priority": "4",
+            "source_origin": "outlook_addin",
+        },
+        format="multipart",
+        HTTP_X_TASKHUB_INGEST_TOKEN="token-123",
+    )
+
+    assert response.status_code == 201
+    assert response.data["idempotent_replay"] is False
+    assert response.data["title"] == "Override title"
+    assert response.data["area"] == Task.Area.PERSONAL
+    assert response.data["priority"] == 4
+    assert response.data["source_type"] == Task.SourceType.EMAIL
+    assert response.data["source_link"] == "outlook_addin"
+    project = Project.objects.get(organization=org, name="Override Project")
+    assert str(response.data["project"]) == str(project.id)
+
+
+@pytest.mark.django_db
+def test_inbound_email_capture_idempotent_replay_uses_source_external_id():
+    org = Organization.objects.create(
+        name="Email Org",
+        inbound_email_address="tasks@example.com",
+        inbound_email_token="token-123",
+    )
+    User.objects.create_user(
+        email="owner@example.com",
+        password="StrongPass123!",
+        role=User.Role.OWNER,
+        organization=org,
+    )
+
+    client = APIClient()
+    source_external_id = "outlook-message-abc123"
+    first_raw_eml = _build_eml(
+        subject="First subject",
+        body="First body",
+        to_address="tasks@example.com",
+    )
+    second_raw_eml = _build_eml(
+        subject="Second subject",
+        body="Second body",
+        to_address="tasks@example.com",
+    )
+
+    first_uploaded = SimpleUploadedFile("first.eml", first_raw_eml, content_type="message/rfc822")
+    second_uploaded = SimpleUploadedFile("second.eml", second_raw_eml, content_type="message/rfc822")
+
+    first_response = client.post(
+        "/capture/email/inbound",
+        {
+            "recipient": "tasks@example.com",
+            "email": first_uploaded,
+            "source_external_id": source_external_id,
+            "task_title": "First created title",
+        },
+        format="multipart",
+        HTTP_X_TASKHUB_INGEST_TOKEN="token-123",
+    )
+    assert first_response.status_code == 201
+    assert first_response.data["idempotent_replay"] is False
+
+    second_response = client.post(
+        "/capture/email/inbound",
+        {
+            "recipient": "tasks@example.com",
+            "email": second_uploaded,
+            "source_external_id": source_external_id,
+            "task_title": "Should not overwrite",
+        },
+        format="multipart",
+        HTTP_X_TASKHUB_INGEST_TOKEN="token-123",
+    )
+    assert second_response.status_code == 200
+    assert second_response.data["idempotent_replay"] is True
+    assert second_response.data["id"] == first_response.data["id"]
+    assert second_response.data["title"] == "First created title"
+    assert Task.objects.filter(organization=org).count() == 1
+
+
+@pytest.mark.django_db
+def test_inbound_email_capture_idempotent_replay_falls_back_to_message_id_header():
+    org = Organization.objects.create(
+        name="Email Org",
+        inbound_email_address="tasks@example.com",
+        inbound_email_token="token-123",
+    )
+    User.objects.create_user(
+        email="owner@example.com",
+        password="StrongPass123!",
+        role=User.Role.OWNER,
+        organization=org,
+    )
+
+    client = APIClient()
+    message_id = "<taskhub-test-message-id@example.com>"
+    first_raw_eml = _build_eml(
+        subject="Header fallback first",
+        body="First body",
+        to_address="tasks@example.com",
+        message_id=message_id,
+    )
+    second_raw_eml = _build_eml(
+        subject="Header fallback second",
+        body="Second body",
+        to_address="tasks@example.com",
+        message_id=message_id,
+    )
+
+    first_uploaded = SimpleUploadedFile("first.eml", first_raw_eml, content_type="message/rfc822")
+    second_uploaded = SimpleUploadedFile("second.eml", second_raw_eml, content_type="message/rfc822")
+
+    first_response = client.post(
+        "/capture/email/inbound",
+        {
+            "recipient": "tasks@example.com",
+            "email": first_uploaded,
+        },
+        format="multipart",
+        HTTP_X_TASKHUB_INGEST_TOKEN="token-123",
+    )
+    assert first_response.status_code == 201
+    assert first_response.data["idempotent_replay"] is False
+
+    second_response = client.post(
+        "/capture/email/inbound",
+        {
+            "recipient": "tasks@example.com",
+            "email": second_uploaded,
+        },
+        format="multipart",
+        HTTP_X_TASKHUB_INGEST_TOKEN="token-123",
+    )
+    assert second_response.status_code == 200
+    assert second_response.data["idempotent_replay"] is True
+    assert second_response.data["id"] == first_response.data["id"]
+    assert Task.objects.filter(organization=org).count() == 1
 
 
 @pytest.mark.django_db

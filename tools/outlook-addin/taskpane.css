@@ -49,18 +49,56 @@ label {
   margin: 8px 0 4px;
 }
 
-input {
+input,
+select {
   width: 100%;
   border: 1px solid #c5d2e7;
   border-radius: 8px;
   font-size: 13px;
   padding: 8px 10px;
   outline: none;
+  background: #ffffff;
 }
 
-input:focus {
+input:focus,
+select:focus {
   border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.meta-grid label {
+  margin-top: 10px;
+}
+
+.advanced-settings {
+  margin-top: 12px;
+  border: 1px solid #d8e4f4;
+  border-radius: 8px;
+  padding: 8px;
+  background: #f9fbff;
+}
+
+.advanced-settings summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.advanced-settings[open] summary {
+  margin-bottom: 8px;
+}
+
+.settings-button {
+  margin-top: 10px;
+  background: #e5edf9;
+  color: #1f2937;
 }
 
 .actions {
@@ -76,11 +114,6 @@ button {
   font-size: 13px;
   font-weight: 600;
   padding: 10px 12px;
-}
-
-#save-settings {
-  background: #e5edf9;
-  color: #1f2937;
 }
 
 #capture-email {

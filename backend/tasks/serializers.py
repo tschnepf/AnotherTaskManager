@@ -42,6 +42,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "recurrence",
             "completed_at",
             "source_type",
+            "source_external_id",
             "source_link",
             "source_snippet",
             "assigned_to_user",
@@ -61,6 +62,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "updated_at",
             "completed_at",
             "position",
+            "source_external_id",
         ]
 
     def _project_name_from_payload(self) -> str | None:
