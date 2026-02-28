@@ -174,8 +174,8 @@ Use this split to avoid doing the wrong work in the wrong environment.
 3. Mobile views must not rely on global DRF defaults implicitly.
 
 ### 5.6 OIDC callback URI contract
-1. Canonical iOS redirect URI is `taskhub://oauth/callback`.
-2. Keycloak iOS client redirect URI allowlist must include exactly `taskhub://oauth/callback`.
+1. Canonical iOS redirect URI is `taskhubmobile://oauth/callback`.
+2. Keycloak iOS client redirect URI allowlist must include exactly `taskhubmobile://oauth/callback`.
 3. iOS app must register URL scheme `taskhub`.
 4. Any redirect URI change must be applied in both Keycloak client config and iOS app settings in the same release.
 
@@ -349,7 +349,7 @@ Files to update/create:
 Tasks:
 1. Define realm `taskhub`.
 2. Create iOS public client with PKCE and redirect URI allowlist.
-3. Set canonical redirect URI to `taskhub://oauth/callback`.
+3. Set canonical redirect URI to `taskhubmobile://oauth/callback`.
 4. Define OIDC + API scopes:
    - `openid`
    - `offline_access`

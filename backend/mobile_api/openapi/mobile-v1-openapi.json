@@ -418,6 +418,66 @@
         "summary": "Update notification preferences"
       }
     },
+    "/api/mobile/v1/projects": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Client error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": [
+              "mobile.read"
+            ]
+          }
+        ],
+        "summary": "List projects"
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Client error"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": [
+              "mobile.write"
+            ]
+          }
+        ],
+        "summary": "Create project"
+      }
+    },
     "/api/mobile/v1/session": {
       "get": {
         "responses": {

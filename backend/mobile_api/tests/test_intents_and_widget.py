@@ -16,6 +16,14 @@ def test_intents_idempotency_and_widget_snapshot():
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {token.access_token}")
 
+    missing_idempotency = client.post(
+        "/api/mobile/v1/intents/create-task",
+        {"title": "From Siri"},
+        format="json",
+    )
+    assert missing_idempotency.status_code == 400
+    assert missing_idempotency.data["error"]["code"] == "validation_error"
+
     first = client.post(
         "/api/mobile/v1/intents/create-task",
         {"title": "From Siri"},
