@@ -20,6 +20,12 @@ bash tools/keycloak/validate-realm-export.sh tools/keycloak/realm-export/taskhub
    - `KEYCLOAK_AUTO_PROVISION_USERS=false`
    - `KEYCLOAK_AUTO_PROVISION_ORGANIZATION=false`
 5. If temporary bootstrap auto-provisioning is used, disable it immediately after initial onboarding.
+6. Configure realm session persistence for mobile:
+   - `revokeRefreshToken=false`
+   - `ssoSessionIdleTimeout=2592000` (30 days)
+   - `ssoSessionMaxLifespan=31536000` (365 days)
+   - `offlineSessionIdleTimeout=7776000` (90 days; renewed by use)
+   - `offlineSessionMaxLifespanEnabled=false`
 
 ## Fresh deployment bootstrap (single first-admin command)
 1. Enable web/mobile IdP auth and temporary JIT provisioning in environment:

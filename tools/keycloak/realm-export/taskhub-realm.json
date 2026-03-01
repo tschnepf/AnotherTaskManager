@@ -5,6 +5,12 @@
   "registrationEmailAsUsername": true,
   "loginWithEmailAllowed": true,
   "sslRequired": "none",
+  "revokeRefreshToken": false,
+  "refreshTokenMaxReuse": 0,
+  "ssoSessionIdleTimeout": 2592000,
+  "ssoSessionMaxLifespan": 31536000,
+  "offlineSessionIdleTimeout": 7776000,
+  "offlineSessionMaxLifespanEnabled": false,
   "clients": [
     {
       "clientId": "taskhub-mobile",
